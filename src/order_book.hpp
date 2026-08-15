@@ -10,9 +10,9 @@
 //   modify    change the price or size of a resting order, applying the
 //             standard queue priority rules
 //   order     look up any order ever submitted, resting or finished
-//   snapshot  read the top price levels of either side
+//   snapshot   read the top price levels of either side
 //   statistics last trade price, traded volume, high and low
-//   validate  check every internal invariant, used by the random tester
+//   validate   check every internal invariant, used by the random tester
 //
 // Data structures and why they were chosen
 // ----------------------------------------
@@ -106,10 +106,6 @@ struct MarketStatistics {
 
 class OrderBook {
 public:
-    // Called once per execution, before submit() returns. Optional; it exists
-    // so a simulator or a market data feed can watch trades as they happen.
-    using TradeListener = std::function<void(const Trade&)>;
-
     // Submit a new order and match it against the opposite side immediately.
     //
     // price        ignored for OrderType::Market
@@ -174,8 +170,6 @@ public:
 
     std::size_t resting_order_count() const { return locators_.size(); }
 
-    void set_trade_listener(TradeListener listener) { trade_listener_ = std::move(listener); }
-
     // Check every internal invariant and return a list of problems found.
     // An empty list means the book is consistent. Checked here:
     //   1. the book is not crossed (best bid < best ask)
@@ -229,7 +223,6 @@ private:
     std::unordered_map<OrderId, Locator>    locators_;
     std::unordered_map<OrderId, OrderState> finished_;
     MarketStatistics                        statistics_;
-    TradeListener                           trade_listener_;
     OrderId  next_order_id_ = 1;
     Sequence next_sequence_ = 1;
 };

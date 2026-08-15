@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="en-CA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order book engine: how the code works</title>
+<script>
+  window.MathJax = { tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<script type="module">
+  // the map diagram at the top of the page; theme follows the page palette
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  const isLight = document.documentElement.getAttribute("data-theme") === "light";
+  mermaid.initialize({ startOnLoad: true, theme: isLight ? "neutral" : "dark",
+                       flowchart: { curve: "basis", useMaxWidth: true } });
+</script>
+<style>
+  :root{
+    /* dark is the default palette; a light override follows below */
+    --paper:#12161b; --bg:#12161b; --panel:#1b2027; --card:#1a1f26; --surface:#1a1f26; --raise:#1e242c;
+    --ink:#e9eef4; --soft:#b3bec9; --muted:#b3bec9; --faint:#828d99;
+    --line:#2c343e; --line2:#232a33;
+    --green:#6fc796; --greenbg:#14241c; --greenline:#2f4d3a;
+    --amber:#e0b365; --amberbg:#262010; --amberline:#4d3f20;
+    --blue:#87b8ee; --bluebg:#141e2b; --blueline:#2d425c;
+    --red:#e89296; --redbg:#26161a; --redline:#4f2f35;
+    --slate:#a7b1be; --slatebg:#1c2027; --slateline:#353c46;
+    --accent:#4fb9c2; --accent-ink:#6fd0d8; --accent-bg:#10262a;
+    --def:#87b8ee; --def-bg:#141e2b; --def-bd:#2d425c;
+    --why:#6fc796; --why-bg:#14241c; --why-bd:#2f4d3a;
+    --warn:#e0b365; --warn-bg:#262010; --warn-bd:#4d3f20;
+    --flag:#e89296; --flag-bg:#26161a; --flag-bd:#4f2f35;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  }
+  :root[data-theme="light"]{
+    --paper:#faf8f4; --bg:#faf8f4; --panel:#f1ede6; --card:#ffffff; --surface:#ffffff; --raise:#fbfaf7;
+    --ink:#1b1b1b; --soft:#4a453e; --muted:#4a453e; --faint:#777067;
+    --line:#d6d0c6; --line2:#e7e2da;
+    --green:#2f6b4c; --greenbg:#e7f1ea; --greenline:#bcdac9;
+    --amber:#8f6413; --amberbg:#f6efdd; --amberline:#e3d3a8;
+    --blue:#2c5f95; --bluebg:#e7eef7; --blueline:#c3d6ea;
+    --red:#943232; --redbg:#f6eaea; --redline:#e2c4c4;
+    --slate:#525a66; --slatebg:#eceef1; --slateline:#cdd2d9;
+    --accent:#0e7c86; --accent-ink:#0b5f67; --accent-bg:#e7f4f4;
+    --def:#2c5f95; --def-bg:#e7eef7; --def-bd:#c3d6ea;
+    --why:#2f6b4c; --why-bg:#e7f1ea; --why-bd:#bcdac9;
+    --warn:#8f6413; --warn-bg:#f6efdd; --warn-bd:#e3d3a8;
+    --flag:#943232; --flag-bg:#f6eaea; --flag-bd:#e2c4c4;
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;font-size:16px}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:18px;line-height:1.58;-webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility}
+  .wrap{padding:2.2em clamp(1em,4vw,3.2em) 5em}
+
+  h1{font-size:clamp(2.1rem,5vw,2.7rem);line-height:1.12;letter-spacing:-.02em;font-weight:800;
+    text-wrap:balance;margin:.2em 0 .2em}
+  h2{font-size:1.5rem;font-weight:750;letter-spacing:-.01em;text-wrap:balance;
+    margin:2.4em 0 .5em;padding-top:.7em;border-top:2px solid var(--line)}
+  h3{font-size:1.26rem;font-weight:700;margin:1.7em 0 .4em;color:var(--ink)}
+  h3 code{font-size:.92em}
+  h4{font-size:1rem;margin:1.3em 0 .3em;text-transform:uppercase;letter-spacing:.05em;color:var(--faint)}
+  p{margin:.7em 0}
+  ul,ol{margin:.55em 0;padding-left:1.3em}
+  li{margin:.3em 0}
+  strong,b{color:var(--ink)}
+  a{color:var(--accent-ink);text-underline-offset:2px}
+  a:hover{color:var(--accent)}
+  hr{border:none;border-top:1px solid var(--line);margin:2.5em 0}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  code{font-family:var(--mono);font-size:.9em;background:var(--panel);color:var(--ink);
+    padding:.1em .4em;border-radius:4px}
+  pre{background:var(--raise);border:1px solid var(--line);border-radius:10px;padding:1em 1.15em;
+    overflow-x:auto;font-size:.94rem;line-height:1.62;margin:1.1em 0;color:var(--ink);
+    font-family:var(--mono)}
+  pre code{background:none;padding:0;font-size:1em}
+  pre .c{color:var(--faint);font-style:italic}
+
+  .lede{font-size:1.12rem;line-height:1.48;color:var(--soft)}
+  .eyebrow{font-family:var(--mono);font-size:.78rem;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent-ink);margin:0 0 1.1em;display:flex;gap:.6em;align-items:center;flex-wrap:wrap}
+  .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+  .sec-no{font-family:var(--mono);font-size:.85rem;color:var(--accent-ink);
+    letter-spacing:.1em;display:block;margin-bottom:.15em}
+  .tag{display:inline-block;font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;
+    background:var(--greenbg);color:var(--green);border:1px solid var(--greenline);
+    padding:.25em .75em;border-radius:20px;margin-bottom:1em}
+  .big{font-size:1.42rem;font-weight:700;color:var(--green)}
+  .pill{font-variant-numeric:tabular-nums;font-weight:600}
+  .fnote{font-size:.95rem;color:var(--soft)}
+  .reads{margin:.55em 0}
+  .reads b{color:var(--soft)}
+  .foot{margin-top:3em;padding-top:1.2em;border-top:1px solid var(--line);
+    color:var(--soft);font-size:.95rem}
+
+  .box{border:1px solid var(--line);border-left-width:4px;border-radius:10px;
+    padding:1em 1.2em;margin:1.3em 0;background:var(--card)}
+  .box>:first-child{margin-top:0}.box>:last-child{margin-bottom:0}
+  .box p:first-child{margin-top:0}.box p:last-child{margin-bottom:0}
+  .box .k{font-weight:700;font-size:.82rem;text-transform:uppercase;letter-spacing:.08em;
+    display:block;margin-bottom:.45em}
+  .def{border-left-color:var(--def);background:var(--def-bg)}.def .k{color:var(--def)}
+  .gist{border-left-color:var(--accent);background:var(--accent-bg)}.gist .k{color:var(--accent-ink)}
+  .why{border-left-color:var(--why);background:var(--why-bg)}.why .k{color:var(--why)}
+  .warn{border-left-color:var(--warn);background:var(--warn-bg)}.warn .k{color:var(--warn)}
+  .flag{border-left-color:var(--flag);background:var(--flag-bg)}.flag .k{color:var(--flag)}
+  .data{border-left-color:var(--slate);background:var(--slatebg)}.data .k{color:var(--slate)}
+  .io{display:grid;grid-template-columns:1fr 1fr;gap:.9em}
+  .io.stack{grid-template-columns:1fr}
+  @media (max-width:820px){.io{grid-template-columns:1fr}}
+  .io .lab{font-family:var(--mono);font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);font-weight:700}
+  .io pre{margin:.25em 0 0;font-size:.8rem;line-height:1.5}
+  .data>p{font-size:.95rem}
+
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:1.1em 1.4em;margin:1.8em 0}
+  .toc .rk{font-family:var(--mono);font-size:.76rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--faint);margin-bottom:.5em}
+  .toc ol{margin:.35em 0 0;padding-left:1.4em}
+  .toc a{text-decoration:none;color:var(--ink)}
+  .toc a:hover{color:var(--accent-ink)}
+
+  .scroll{overflow-x:auto;margin:1.2em 0}
+  table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:1rem;background:var(--card);
+    font-variant-numeric:tabular-nums}
+  .scroll table{margin:0}
+  th,td{border:1px solid var(--line);padding:.55em .75em;text-align:left;vertical-align:top}
+  th,thead th{background:var(--panel);color:var(--ink);font-weight:700}
+  td.n,th.n{text-align:right}
+  .pass{color:var(--green);font-weight:700}
+  .failw{color:var(--red);font-weight:700}
+
+  .chip{display:inline-block;font-size:.74rem;font-weight:700;text-transform:uppercase;
+    letter-spacing:.06em;padding:.15em .55em;border-radius:4px;white-space:nowrap;border:1px solid}
+  .c-veto{background:var(--redbg);color:var(--red);border-color:var(--redline)}
+  .c-drop{background:var(--amberbg);color:var(--amber);border-color:var(--amberline)}
+  .c-never{background:var(--slatebg);color:var(--slate);border-color:var(--slateline)}
+  .c-bug{background:var(--bluebg);color:var(--blue);border-color:var(--blueline)}
+  .legend{display:flex;flex-wrap:wrap;gap:.5em 1.1em;margin:1em 0 0;font-size:.92rem;color:var(--soft)}
+  .legend span.chip{margin-right:.4em}
+
+  figure{margin:1.6em 0;text-align:center}
+  /* charts are rendered on white canvases; keep the white plate but soften the glare */
+  figure img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:8px;
+    background:#fff;padding:6px}
+  :root:not([data-theme="light"]) figure img{filter:brightness(.94) contrast(1.02)}
+  figcaption{font-size:.92rem;color:var(--soft);margin-top:.6em;
+    margin-left:auto;margin-right:auto}
+
+  /* the map diagram sits on its own plate and scrolls sideways rather than the page */
+  .mermaid{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:1.2em;margin:1.4em 0;overflow-x:auto;text-align:center;
+    font-family:var(--sans)}
+  .mermaid svg{max-width:100%;height:auto}
+
+  /* rendered maths inherits the page colour instead of MathJax's own default */
+  mjx-container,.katex{color:inherit}
+  mjx-container[display="true"],.katex-display{overflow-x:auto;overflow-y:hidden;padding:.15em 0}
+</style>
+</head><body>
+<div class="wrap">
+
+<p class="eyebrow"><span class="dot"></span>ORDER BOOK ENGINE &middot; C++ &middot; code guide</p>
+<h1>How this order book works</h1>
+<p class="lede">A matching engine is a queue with two rules: price first, then
+arrival time. This page follows an order through the code from arrival to exit.</p>
+
+<div class="box def">
+  <span class="k">How to use this</span>
+  <p>Sections follow an order through the engine. The build script copies each
+  snippet from <code>src/</code>, and every number in a <b>Sample data</b> box
+  came from a live run. Coloured boxes call out design choices and traps.</p>
+</div>
+
+<div class="box why">
+  <span class="k">The whole engine in plain English</span>
+  <p>Buyers and sellers send orders. The engine sorts unfilled orders by best
+  price, then by age. A new order checks the best order on the other side. If the
+  prices overlap, they trade at the older order's price. The new order's remainder
+  either joins the queue or is discarded, depending on its type.</p>
+  <p>The difficult parts are cancelling an order in the middle of a queue without
+  searching for it, and keeping each price level's cached quantities correct.</p>
+</div>
+
+<h2 id="map"><span class="sec-no">00</span>Map</h2>
+
+<div class="mermaid">
+flowchart LR
+  in["submit()"] --> ex["execute()"]
+  ex --> mt["match()"]
+  mt --> rs["rest()"]
+  ex --> rs
+  cx["cancel()"] --> dt["detach()"]
+  md["modify()"] --> dt
+  md --> ex
+  rs --> book[("bids / asks<br/>+ locators")]
+  dt --> book
+  mt --> book
+  book --> vl["validate()"]
+</div>
+<p class="fnote">Boxes are functions, the cylinder is the stored book, and arrows
+show the flow. <code>submit()</code>, <code>cancel()</code> and
+<code>modify()</code> are the public entry points; the rest is internal.</p>
+
+<div class="toc">
+  <div class="rk">Contents</div>
+  <ol>
+    <li><a href="#sec1">Where orders live &mdash; the three structures</a></li>
+    <li><a href="#sec2">The front door &mdash; <code>submit()</code></a></li>
+    <li><a href="#sec3">Check, match, wait &mdash; <code>execute()</code></a></li>
+    <li><a href="#sec4">The matching loop &mdash; <code>match()</code></a></li>
+    <li><a href="#sec5">Joining the queue &mdash; <code>rest()</code></a></li>
+    <li><a href="#sec6">Leaving early &mdash; <code>cancel()</code> and <code>detach()</code></a></li>
+    <li><a href="#sec7">Changing an order &mdash; <code>modify()</code></a></li>
+    <li><a href="#sec8">Checking the book &mdash; <code>validate()</code></a></li>
+    <li><a href="#sec9">Random order flow &mdash; <code>RandomFlow::next()</code></a></li>
+  </ol>
+</div>
+
+<h2 id="sec1"><span class="sec-no">01</span>Where orders live &mdash; three structures</h2>
+
+<p>These three choices determine how the rest of the engine behaves.</p>
+
+<pre>struct PriceLevel {
+    std::list&lt;Order&gt; orders;
+    Quantity         visible_quantity = 0;
+    Quantity         total_quantity   = 0;
+};</pre>
+
+<pre>    using BidLadder = std::map&lt;Price, PriceLevel, std::greater&lt;Price&gt;&gt;;
+    using AskLadder = std::map&lt;Price, PriceLevel, std::less&lt;Price&gt;&gt;;
+
+    <span class="c">// Where a resting order lives, so cancel() and modify() reach it directly.</span>
+    struct Locator {
+        Side                       side;
+        Price                      price;
+        std::list&lt;Order&gt;::iterator position;</pre>
+
+<div class="box gist"><span class="k">The idea</span>
+<p>The book is a sorted list of prices. Each price holds an order queue. A
+separate lookup records each order's exact position, so a cancel needs no search.</p></div>
+
+<div class="box def"><span class="k">What each one does</span>
+<p><b><code>bids_</code> and <code>asks_</code>:</b> ordered maps from price to
+its queue. Bids sort high to low and asks low to high, so <code>begin()</code>
+is always the best price.<br>
+<b><code>PriceLevel::orders</code>:</b> a <code>std::list</code>, or doubly linked
+list. The front is oldest; the back is newest.<br>
+<b><code>locators_</code>:</b> a hash map from order ID to its side, price, and
+exact position in the queue.</p></div>
+
+<div class="box why"><span class="k">Why a map and not a heap</span>
+<p>A binary heap gives cheap access to the best price, but it is poor at removing
+an order at an arbitrary price. An ordered map keeps the best price at
+<code>begin()</code> and can also find or erase any price by key.</p></div>
+
+<div class="box why"><span class="k">Why a linked list and not a vector</span>
+<p><code>locators_</code> stores an iterator into the queue. Removing from the
+middle of a vector shifts later elements and invalidates their positions. A linked
+list changes only its two neighbours, so the other iterators stay valid.</p></div>
+
+<div class="box def"><span class="k">Two sizes per level, not one</span>
+<p><code>visible_quantity</code> is what the market can see.
+<code>total_quantity</code> also includes hidden iceberg quantity. Without an
+iceberg the two are equal. Running totals let the engine read a level's depth
+without walking its queue.</p></div>
+
+<div class="box warn"><span class="k">Trap</span>
+<p>These totals are easy to desynchronise. Every size change must update both, or
+the book will report quantity that does not exist. Section 08's
+<code>validate()</code> check catches this, and the random tester runs it after
+every instruction.</p></div>
+
+<h2 id="sec2"><span class="sec-no">02</span>The front door &mdash; <code>submit()</code></h2>
+
+<pre>SubmitResult OrderBook::submit(Side      side,
+                               OrderType type,
+                               Price     price,
+                               Quantity  quantity,
+                               Quantity  display_size) {
+    if (quantity &lt;= 0) {
+        throw std::invalid_argument(&quot;order quantity must be positive&quot;);
+    }
+    if (type == OrderType::Iceberg &amp;&amp; display_size &lt;= 0) {
+        throw std::invalid_argument(&quot;iceberg order needs a positive display size&quot;);
+    }
+
+    Order incoming;
+    incoming.id                = next_order_id_++;
+    incoming.side              = side;
+    incoming.type              = type;
+    incoming.price             = type == OrderType::Market ? kNoPrice : price;
+    incoming.original_quantity = quantity;
+    incoming.remaining         = quantity;
+    incoming.visible           = quantity;
+    incoming.display_size      = type == OrderType::Iceberg ? display_size : 0;
+
+    return execute(incoming);
+}</pre>
+
+<div class="box gist"><span class="k">The idea</span>
+<p>Check the request, assign an order number, and pass it to the matching path.</p></div>
+
+<div class="box def"><span class="k">Purpose</span>
+<p><b>Input:</b> side, type, price, quantity, and an iceberg display size.
+<b>Output:</b> a <code>SubmitResult</code> with the order ID, trades, final status,
+and whether any quantity is still waiting. <b>Role:</b> the only entry point for
+a new order.</p></div>
+
+<div class="box data"><span class="k">Sample data</span>
+<div class="io stack">
+<div><span class="lab">in &mdash; four instructions</span>
+<pre>LIMIT SELL 100.35 300
+LIMIT SELL 100.30 200
+BOOK
+LIMIT BUY 100.40 400
+BOOK</pre></div>
+<div><span class="lab">out &mdash; what the engine printed</span>
+<pre>LIMIT SELL 100.35 300
+  order 1 NEW
+  remainder resting in the book
+LIMIT SELL 100.30 200
+  order 2 NEW
+  remainder resting in the book
+BOOK
+      bid size         bid         ask    ask size
+                                100.30         200
+                                100.35         300
+  resting orders 2
+LIMIT BUY 100.40 400
+  order 3 FILLED
+  trade 200 @ 100.30  taker 3 maker 2
+  trade 200 @ 100.35  taker 3 maker 1
+BOOK
+      bid size         bid         ask    ask size
+                                100.35         100
+  resting orders 1</pre>
+<p class="fnote">The buyer would pay up to 100.40, but trades at the sellers' prices:
+100.30 for the first 200 and 100.35 for the next 200. The buyer paid 40130 rather
+than 40160, the cost of 400 at its limit.</p></div>
+</div></div>
+
+<p><b>What happens:</b></p>
+<ol>
+  <li>Reject a non-positive quantity with an exception.</li>
+  <li>Reject an iceberg with no display size.</li>
+  <li>Create an <code>Order</code> with a new ID and the requested quantities.</li>
+  <li>Force a market order's price to <code>kNoPrice</code>.</li>
+  <li>Pass the order to <code>execute()</code>.</li>
+</ol>
+
+<div class="box why"><span class="k">Why three quantity fields</span>
+<p><code>original_quantity</code> is the starting size, so filled quantity is
+<code>original - remaining</code>. <code>remaining</code> is what can still trade;
+<code>visible</code> is what the market can see. Deriving filled quantity avoids a
+fourth number that could get out of sync.</p></div>
+
+<h2 id="sec3"><span class="sec-no">03</span>Checks, match, rest &mdash; <code>execute()</code></h2>
+
+<pre>SubmitResult OrderBook::execute(Order incoming) {
+    incoming.sequence = next_sequence_++;
+
+    SubmitResult result;
+    result.id = incoming.id;
+
+    const bool is_market = incoming.type == OrderType::Market;
+
+    <span class="c">// A post-only order exists to add liquidity, never to take it, so it is</span>
+    <span class="c">// refused outright if the book would let it trade right now.</span>
+    if (incoming.type == OrderType::PostOnly) {
+        const bool would_trade =
+            incoming.side == Side::Buy
+                ? (best_ask() &amp;&amp; *best_ask() &lt;= incoming.price)
+                : (best_bid() &amp;&amp; *best_bid() &gt;= incoming.price);
+        if (would_trade) {
+            result.status = OrderStatus::Rejected;
+            remember_finished(incoming, OrderStatus::Rejected);
+            return result;
+        }
+    }
+
+    <span class="c">// Fill-or-kill is checked before anything trades: if the whole size cannot</span>
+    <span class="c">// be filled right now, the order is rejected and the book is untouched.</span>
+    <span class="c">// Hidden iceberg size counts here, because it is real liquidity.</span>
+    if (incoming.type == OrderType::FillOrKill &amp;&amp;
+        available_quantity(incoming.side, incoming.price, false) &lt; incoming.remaining) {
+        result.status = OrderStatus::Killed;
+        remember_finished(incoming, OrderStatus::Killed);
+        return result;
+    }
+
+    if (incoming.side == Side::Buy) {
+        match(
+            asks_, incoming,
+            [&amp;](Price level_price) { return is_market || level_price &lt;= incoming.price; },
+            result.trades);
+    } else {
+        match(
+            bids_, incoming,
+            [&amp;](Price level_price) { return is_market || level_price &gt;= incoming.price; },
+            result.trades);
+    }
+
+    <span class="c">// Only limit, iceberg and post-only orders wait in the book. Market,</span>
+    <span class="c">// immediate-or-cancel and fill-or-kill remainders are dropped.</span>
+    const bool may_rest = incoming.type == OrderType::Limit ||
+                          incoming.type == OrderType::Iceberg ||
+                          incoming.type == OrderType::PostOnly;
+
+    if (incoming.remaining &gt; 0 &amp;&amp; may_rest) {
+        rest(incoming);
+        result.resting = true;
+    }
+
+    if (incoming.remaining == 0) {
+        result.status = OrderStatus::Filled;
+        remember_finished(incoming, OrderStatus::Filled);
+    } else if (result.resting) {
+        result.status = result.trades.empty() ? OrderStatus::New : OrderStatus::PartiallyFilled;
+    } else {
+        <span class="c">// A market or immediate-or-cancel order that could not be completed.</span>
+        result.status = OrderStatus::Cancelled;
+        remember_finished(incoming, OrderStatus::Cancelled);
+    }
+
+    return result;
+}</pre>
+
+<div class="box gist"><span class="k">The idea</span>
+<p>Post-only and fill-or-kill get checked before trading. Everything else matches
+first; the remainder either waits in the book or is discarded.</p></div>
+
+<div class="box def"><span class="k">Purpose</span>
+<p><b>Input:</b> a complete new or amended order. <b>Output:</b> its trades, final
+status, and whether it is still waiting. <b>Role:</b> the one path shared by new
+and amended orders.</p></div>
+
+<div class="box data"><span class="k">Sample data &mdash; post-only</span>
+<div class="io stack">
+<div><span class="lab">in</span>
+<pre>LIMIT SELL 100.30 500
+POSTONLY BUY 100.30 200
+POSTONLY BUY 100.29 200
+BOOK</pre></div>
+<div><span class="lab">out</span>
+<pre>LIMIT SELL 100.30 500
+  order 1 NEW
+  remainder resting in the book
+POSTONLY BUY 100.30 200
+  order 2 REJECTED
+POSTONLY BUY 100.29 200
+  order 3 NEW
+  remainder resting in the book
+BOOK
+      bid size         bid         ask    ask size
+           200      100.29      100.30         500
+  spread 0.01, mid 100.29
+  resting orders 2</pre>
+<p class="fnote">Order 2 would have traded immediately, so it was refused. Order 3
+was one cent lower, so it waited and became the best bid.</p></div>
+</div></div>
+
+<div class="box data"><span class="k">Sample data &mdash; fill-or-kill</span>
+<div class="io stack">
+<div><span class="lab">in</span>
+<pre>LIMIT SELL 100.30 100
+LIMIT SELL 100.50 900
+FOK BUY 100.35 400
+BOOK</pre></div>
+<div><span class="lab">out</span>
+<pre>LIMIT SELL 100.30 100
+  order 1 NEW
+  remainder resting in the book
+LIMIT SELL 100.50 900
+  order 2 NEW
+  remainder resting in the book
+FOK BUY 100.35 400
+  order 3 KILLED
+BOOK
+      bid size         bid         ask    ask size
+                                100.30         100
+                                100.50         900
+  resting orders 2</pre>
+<p class="fnote">Only 100 was available at or below 100.35. The 900 at 100.50 was too
+expensive, so the order was killed before trading and both sellers stayed put.</p></div>
+</div></div>
+
+<p><b>What happens:</b></p>
+<ol>
+  <li>Stamp an arrival number. An amended order gets a new one and loses its place.</li>
+  <li>Reject post-only if the best price on the other side would let it trade.</li>
+  <li>Check fill-or-kill before trading; if the full size is unavailable, change nothing.</li>
+  <li>Match against prices that cross the incoming order's limit.</li>
+  <li>Let limit, iceberg, and post-only remainders wait; discard the others.</li>
+  <li>Set the final status and record orders that have left the book.</li>
+</ol>
+
+<div class="box why"><span class="k">Why fill-or-kill is checked first, not attempted</span>
+<p>Trading first and undoing a partial fill would mean restoring several orders to
+their old queue positions. Counting available quantity first is one pass through
+the relevant price levels and cannot leave a half-reversed trade.</p></div>
+
+<div class="box def"><span class="k">Hidden size counts as real liquidity</span>
+<p>The check calls <code>available_quantity</code>, which sums each level's
+<code>total_quantity</code>, including hidden iceberg quantity. Hidden quantity can
+trade, so ignoring it would reject orders that could be filled.</p></div>
+
+<div class="box flag"><span class="k">The choice, stated honestly</span>
+<p>Some venues count only displayed size, which makes FOK orders fail more often
+but keeps hidden size hidden. This engine counts all executable size. Change the
+argument passed to <code>available_quantity</code> to choose the other rule.</p></div>
+
+<h2 id="sec4"><span class="sec-no">04</span>The matching loop &mdash; <code>match()</code></h2>
+
+<pre>void OrderBook::match(Ladder&amp;                           ladder,
+                      Order&amp;                            incoming,
+                      const std::function&lt;bool(Price)&gt;&amp; crosses,
+                      std::vector&lt;Trade&gt;&amp;               trades) {
+    while (incoming.remaining &gt; 0 &amp;&amp; !ladder.empty()) {
+        auto        level_it    = ladder.begin();  <span class="c">// best price on this side</span>
+        const Price level_price = level_it-&gt;first;
+        if (!crosses(level_price)) {
+            break;
+        }
+
+        PriceLevel&amp; level = level_it-&gt;second;
+        while (incoming.remaining &gt; 0 &amp;&amp; !level.orders.empty()) {
+            Order&amp;         maker = level.orders.front();  <span class="c">// oldest order wins</span>
+            const Quantity fill  = std::min(incoming.remaining, maker.visible);
+
+            incoming.remaining     -= fill;
+            maker.visible          -= fill;
+            maker.remaining        -= fill;
+            level.visible_quantity -= fill;
+            level.total_quantity   -= fill;
+
+            <span class="c">// The trade prints at the resting order&#x27;s price, so the taker gets</span>
+            <span class="c">// any price improvement between its limit and the book.</span>
+            const Trade trade{incoming.id, maker.id, incoming.side, level_price, fill};
+            trades.push_back(trade);
+            record_trade(trade);
+
+            if (maker.remaining == 0) {
+                remember_finished(maker, OrderStatus::Filled);
+                locators_.erase(maker.id);
+                level.orders.pop_front();
+            } else if (maker.visible == 0) {
+                <span class="c">// Iceberg: the shown slice is used up, so a fresh slice comes</span>
+                <span class="c">// out of hiding and the order loses its place in the queue.</span>
+                <span class="c">// splice() moves the node itself, so the iterator kept in</span>
+                <span class="c">// locators_ stays valid and nothing is copied.</span>
+                const Quantity slice = std::min(maker.display_size, maker.remaining);
+                maker.visible           = slice;
+                level.visible_quantity += slice;
+
+                level.orders.splice(level.orders.end(), level.orders, level.orders.begin());
+                locators_[maker.id].position = std::prev(level.orders.end());
+            }
+        }
+
+        if (level.orders.empty()) {
+            ladder.erase(level_it);
+        }
+    }
+}</pre>
+
+<div class="box gist"><span class="k">The idea</span>
+<p>Take from the best price on the other side, oldest order first, until the
+incoming order is filled or the next price no longer qualifies.</p></div>
+
+<div class="box def"><span class="k">Purpose</span>
+<p><b>Input:</b> one side of the book, the incoming order, and a test for prices it
+can trade at. <b>Output:</b> trades appended to a list and a reduced
+<code>incoming.remaining</code>. <b>Role:</b> the only function that creates trades.</p></div>
+
+<div class="box data"><span class="k">Sample data &mdash; an iceberg refilling</span>
+<div class="io stack">
+<div><span class="lab">in</span>
+<pre>ICEBERG SELL 100.30 1000 100
+LIMIT SELL 100.30 100
+BOOK
+MARKET BUY - 250
+BOOK</pre></div>
+<div><span class="lab">out</span>
+<pre>ICEBERG SELL 100.30 1000 100
+  order 1 NEW
+  remainder resting in the book
+LIMIT SELL 100.30 100
+  order 2 NEW
+  remainder resting in the book
+BOOK
+      bid size         bid         ask    ask size
+                                100.30         200
+  resting orders 2
+MARKET BUY - 250
+  order 3 FILLED
+  trade 100 @ 100.30  taker 3 maker 1
+  trade 100 @ 100.30  taker 3 maker 2
+  trade 50 @ 100.30  taker 3 maker 1
+BOOK
+      bid size         bid         ask    ask size
+                                100.30          50
+  resting orders 1</pre>
+<p class="fnote">Order 1 shows 100 of its 1000 total, so the level shows 200, not
+1100. The 250-unit buy traded 100 from order 1, 100 from order 2, then 50 from
+order 1's next slice. When that first slice ran out, order 1 moved behind order 2.</p></div>
+</div></div>
+
+<p><b>What happens:</b></p>
+<ol>
+  <li>Look at the best price on the other side and stop if it no longer qualifies.</li>
+  <li>Trade with the oldest order there for the smaller of the two visible quantities.</li>
+  <li>Reduce the incoming order, maker order, and both level totals by the fill.</li>
+  <li>Record the trade at the maker's price.</li>
+  <li>Remove a fully filled maker from the queue.</li>
+  <li>Refresh an exhausted iceberg slice and move that order to the back.</li>
+  <li>Erase a price level when its queue becomes empty.</li>
+</ol>
+
+<div class="box why"><span class="k">Why <code>splice</code> and not erase-and-push</span>
+<p><code>splice</code> relinks the existing node. Nothing is copied, and the
+iterator in <code>locators_</code> still points to the same order. Erasing and
+reinserting would leave that iterator pointing at freed memory.</p></div>
+
+<div class="box why"><span class="k">Why the trade prints at the maker's price</span>
+<p>The older order named its price first. The incoming order is willing to pay up
+to its limit, so any gap between the two is price improvement for the incoming
+order. In the sample output, the incoming order is the <i>taker</i> and the older
+one is the <i>maker</i>.</p></div>
+
+<div class="box warn"><span class="k">Trap</span>
+<p>The loop references <code>level.orders.front()</code> and, for an iceberg, moves
+that node to the back. The reference stays valid because <code>splice</code> moves
+nodes instead of copying them. The loop also always makes progress: it either
+removes the maker or reduces the incoming quantity.</p></div>
+
+<h2 id="sec5"><span class="sec-no">05</span>Joining the queue &mdash; <code>rest()</code></h2>
+
+<pre>void OrderBook::rest(const Order&amp; order) {
+    Order stored = order;
+    <span class="c">// An iceberg shows one slice; everything else shows its whole size.</span>
+    stored.visible = stored.display_size &gt; 0
+                         ? std::min(stored.display_size, stored.remaining)
+                         : stored.remaining;
+
+    auto place = [&amp;](auto&amp; ladder) {
+        PriceLevel&amp; level = ladder[stored.price];
+        level.orders.push_back(stored);
+        level.visible_quantity += stored.visible;
+        level.total_quantity   += stored.remaining;
+        locators_[stored.id] =
+            Locator{stored.side, stored.price, std::prev(level.orders.end())};
+    };
+
+    if (stored.side == Side::Buy) {
+        place(bids_);
+    } else {
+        place(asks_);
+    }
+}</pre>
+
+<div class="box gist"><span class="k">The idea</span>
+<p>Put the leftover at the back of its price queue and record its exact position.</p></div>
+
+<div class="box def"><span class="k">Purpose</span>
+<p><b>Input:</b> an order with quantity left. <b>Output:</b> no return value; the
+book and locator map are updated. <b>Role:</b> the only function that adds an
+order to a queue.</p></div>
+
+<p><b>What happens:</b></p>
+<ol>
+  <li>Choose the displayed size: one slice for an iceberg, the full size otherwise.</li>
+  <li>Find the price level, creating it if necessary.</li>
+  <li>Add the order to the back of the queue.</li>
+  <li>Increase both level totals.</li>
+  <li>Record the side, price, and exact position in <code>locators_</code>.</li>
+</ol>
+
+<div class="box why"><span class="k">Why the same lambda for both sides</span>
+<p><code>bids_</code> and <code>asks_</code> sort in opposite directions, so they are
+different types. A generic lambda taking <code>auto&amp;</code> lets one block of
+code work with both and prevents the two versions from drifting apart.</p></div>
+
+<h2 id="sec6"><span class="sec-no">06</span>Leaving early &mdash; <code>cancel()</code> and <code>detach()</code></h2>
+
+<pre>bool OrderBook::cancel(OrderId id) {
+    if (locators_.find(id) == locators_.end()) {
+        return false;  <span class="c">// unknown id, or the order is already fully filled</span>
+    }
+    const Order taken = detach(id);
+    remember_finished(taken, OrderStatus::Cancelled);
+    return true;
+}</pre>
+
+<pre>Order OrderBook::detach(OrderId id) {
+    const Locator locator = locators_.at(id);
+    Order         taken   = *locator.position;
+    locators_.erase(id);
+
+    auto remove_from = [&amp;](auto&amp; ladder) {
+        const auto level_it = ladder.find(locator.price);
+        if (level_it == ladder.end()) {
+            return;
+        }
+        PriceLevel&amp; level = level_it-&gt;second;
+        level.visible_quantity -= locator.position-&gt;visible;
+        level.total_quantity   -= locator.position-&gt;remaining;
+        level.orders.erase(locator.position);
+        if (level.orders.empty()) {
+            ladder.erase(level_it);
+        }
+    };
+
+    if (locator.side == Side::Buy) {
+        remove_from(bids_);
+    } else {
+        remove_from(asks_);
+    }
+    return taken;
+}</pre>
+
+<div class="box gist"><span class="k">The idea</span>
+<p>Look up the order, remove it from its queue, and subtract its size from the
+level totals.</p></div>
+
+<div class="box def"><span class="k">Purpose</span>
+<p><b>Input:</b> an order ID. <b>Output:</b> <code>cancel</code> returns true or
+false; <code>detach</code> returns the removed order. <b>Role:</b>
+<code>detach</code> is shared by cancellation and repricing, so removal logic lives
+in one place.</p></div>
+
+<div class="box why"><span class="k">Why this matters</span>
+<p>Scanning a price queue makes a deep cancel slow. The locator map turns it into a
+hash lookup followed by removing one node, no matter where the order sits.</p></div>
+
+<div class="box warn"><span class="k">Trap</span>
+<p><code>detach</code> copies the locator before erasing its map entry. A reference
+into the hash map would become invalid at the erase, even if the bug appeared to
+work most of the time.</p></div>
+
+<div class="box def"><span class="k">Cancelling twice is not an error</span>
+<p>An order can fill before its cancel arrives. That is normal, so an unknown ID
+returns false rather than throwing.</p></div>
+
+<h2 id="sec7"><span class="sec-no">07</span>Changing an order &mdash; <code>modify()</code></h2>
+
+<pre>ModifyResult OrderBook::modify(OrderId id, Price new_price, Quantity new_quantity) {
+    if (new_quantity &lt;= 0) {
+        throw std::invalid_argument(&quot;modified quantity must be positive&quot;);
+    }
+
+    ModifyResult result;
+    const auto   found = locators_.find(id);
+    if (found == locators_.end()) {
+        return result;  <span class="c">// found stays false</span>
+    }
+    result.found = true;
+
+    const Locator&amp; locator       = found-&gt;second;
+    Order&amp;         resting_order = *locator.position;
+
+    <span class="c">// Shrinking at the same price is the one change that keeps the order&#x27;s</span>
+    <span class="c">// place in the queue. Everything else, including any size increase, is a</span>
+    <span class="c">// cancel and replace at the back of the queue.</span>
+    if (new_price == locator.price &amp;&amp; new_quantity &lt; resting_order.remaining) {
+        const Quantity new_visible = resting_order.display_size &gt; 0
+                                         ? std::min(resting_order.visible, new_quantity)
+                                         : new_quantity;
+
+        auto shrink = [&amp;](auto&amp; ladder) {
+            PriceLevel&amp; level = ladder.at(locator.price);
+            level.total_quantity   -= resting_order.remaining - new_quantity;
+            level.visible_quantity -= resting_order.visible - new_visible;
+        };
+        if (locator.side == Side::Buy) {
+            shrink(bids_);
+        } else {
+            shrink(asks_);
+        }
+
+        <span class="c">// The order keeps whatever it has already traded, so the original size</span>
+        <span class="c">// moves down with the remaining size.</span>
+        const Quantity already_filled =
+            resting_order.original_quantity - resting_order.remaining;
+        resting_order.remaining         = new_quantity;
+        resting_order.visible           = new_visible;
+        resting_order.original_quantity = already_filled + new_quantity;
+
+        result.kept_queue_position = true;
+        result.outcome.id          = id;
+        result.outcome.resting     = true;
+        result.outcome.status =
+            already_filled &gt; 0 ? OrderStatus::PartiallyFilled : OrderStatus::New;
+        return result;
+    }
+
+    Order moved = detach(id);
+    const Quantity already_filled = moved.original_quantity - moved.remaining;
+    moved.price             = new_price;
+    moved.remaining         = new_quantity;
+    moved.visible           = new_quantity;  <span class="c">// rest() recomputes the iceberg slice</span>
+    moved.original_quantity = already_filled + new_quantity;
+
+    result.outcome = execute(moved);
+    return result;
+}</pre>
+
+<div class="box gist"><span class="k">The idea</span>
+<p>Making an order smaller at the same price keeps its place. Any other change
+removes it and re-enters it as a new order.</p></div>
+
+<div class="box def"><span class="k">Purpose</span>
+<p><b>Input:</b> an order ID, new price, and new remaining quantity.
+<b>Output:</b> whether it was found, whether it kept its place, and the result if
+it re-enters the book. <b>Role:</b> the path for changing a waiting order.</p></div>
+
+<div class="box data"><span class="k">Sample data</span>
+<div class="io stack">
+<div><span class="lab">in</span>
+<pre>LIMIT BUY 100.25 500
+LIMIT BUY 100.25 300
+MODIFY 1 100.25 200
+BOOK
+MODIFY 1 100.26 200
+BOOK
+STATUS 1</pre></div>
+<div><span class="lab">out</span>
+<pre>LIMIT BUY 100.25 500
+  order 1 NEW
+  remainder resting in the book
+LIMIT BUY 100.25 300
+  order 2 NEW
+  remainder resting in the book
+MODIFY 1 100.25 200
+  size reduced, kept its place in the queue
+  order 1 NEW
+  remainder resting in the book
+BOOK
+      bid size         bid         ask    ask size
+           500      100.25                        
+  resting orders 2
+MODIFY 1 100.26 200
+  requeued at the back of the price level
+  order 1 NEW
+  remainder resting in the book
+BOOK
+      bid size         bid         ask    ask size
+           200      100.26                        
+           300      100.25                        
+  resting orders 2
+STATUS 1
+  BUY LIMIT 100.26 NEW, filled 0 of 200, left 200, resting</pre>
+<p class="fnote">After the first change the level still shows 500: order 1 has 200
+and order 2 has 300, with order 1 still first. The one-cent price change moves
+order 1 to 100.26, where it is the only order.</p></div>
+</div></div>
+
+<p><b>What happens:</b></p>
+<ol>
+  <li>Reject a non-positive new quantity.</li>
+  <li>Return <code>found = false</code> if the order has already left the book.</li>
+  <li>For a same-price reduction, update the two totals and order in place.</li>
+  <li>Adjust <code>original_quantity</code> so filled quantity stays unchanged.</li>
+  <li>Otherwise remove the order with <code>detach</code> and pass it through
+  <code>execute()</code>, where it can trade at its new price.</li>
+</ol>
+
+<div class="box why"><span class="k">Why only a size cut keeps priority</span>
+<p>A smaller order does not jump the orders behind it, so it keeps its place. A
+larger order or a better price would jump them, so the changed order goes to the
+back. This is why reducing size is different from cancelling and resending.</p></div>
+
+<div class="box why"><span class="k">Why the requeue path reuses <code>execute()</code></span>
+<p>An order at a new price may cross the spread and trade immediately. Sending it
+through <code>execute()</code> gives new and changed orders the same matching rules.</p></div>
+
+<h2 id="sec8"><span class="sec-no">08</span>Checking the book &mdash; <code>validate()</code></h2>
+
+<p>The functions above update cached numbers as orders change. This function checks
+those updates. It returns a list of problems; an empty list means the book is
+consistent.</p>
+
+<div class="box def"><span class="k">What it checks</span>
+<ol>
+<li>The book is not crossed: the best bid is below the best ask.</li>
+<li>Each level's <code>visible_quantity</code> and <code>total_quantity</code> equal
+the sum of its orders.</li>
+<li>No price level is empty, and no waiting order has a non-positive size or shows
+more quantity than it holds.</li>
+<li>Every waiting order has a <code>locators_</code> entry pointing to the right
+object, price, and side.</li>
+<li>The locator count equals the number of orders in the two ladders.</li>
+</ol></div>
+
+<div class="box why"><span class="k">Why this is worth writing</span>
+<p>These checks catch failures that would otherwise produce a wrong book without
+crashing. The engine reports the problem instead of continuing with bad data.</p></div>
+
+<h2 id="sec9"><span class="sec-no">09</span>Random order flow &mdash; <code>RandomFlow::next()</code></h2>
+
+<pre>Instruction RandomFlow::next(const OrderBook&amp; book, const std::vector&lt;OrderId&gt;&amp; resting_ids) {
+    Instruction instruction;
+    const Price reference = reference_price(book);
+
+    <span class="c">// Cancels and amendments need something to act on. With an empty book the</span>
+    <span class="c">// generator falls through to a submit.</span>
+    if (!resting_ids.empty()) {
+        const double roll = chance_(engine_);
+        std::uniform_int_distribution&lt;std::size_t&gt; pick(0, resting_ids.size() - 1);
+
+        if (roll &lt; settings_.cancel_share) {
+            instruction.kind   = Instruction::Kind::Cancel;
+            instruction.target = resting_ids[pick(engine_)];
+            return instruction;
+        }
+        if (roll &lt; settings_.cancel_share + settings_.modify_share) {
+            instruction.kind   = Instruction::Kind::Modify;
+            instruction.target = resting_ids[pick(engine_)];
+
+            <span class="c">// Half the amendments (by default) keep the price and cut the size,</span>
+            <span class="c">// which is the case that keeps its place in the queue. The rest</span>
+            <span class="c">// move the price, which sends the order to the back.</span>
+            const auto  current = book.order(instruction.target);
+            const bool  shrink  = chance_(engine_) &lt; settings_.modify_shrink_share;
+            if (shrink &amp;&amp; current &amp;&amp; current-&gt;resting &amp;&amp; current-&gt;remaining_quantity &gt; 1) {
+                std::uniform_int_distribution&lt;Quantity&gt; smaller(
+                    1, current-&gt;remaining_quantity - 1);
+                instruction.new_price    = current-&gt;price;
+                instruction.new_quantity = smaller(engine_);
+            } else {
+                instruction.new_price    = random_price_near(reference);
+                instruction.new_quantity = random_quantity();
+            }
+            return instruction;
+        }
+    }
+
+    instruction.kind     = Instruction::Kind::Submit;
+    instruction.side     = random_side();
+    instruction.type     = random_type();
+    instruction.quantity = random_quantity();
+    instruction.price    = instruction.type == OrderType::Market
+                               ? kNoPrice
+                               : random_price_near(reference);
+
+    if (instruction.type == OrderType::Iceberg) {
+        <span class="c">// At least one unit shown, so the order is never invisible.</span>
+        instruction.display_size =
+            std::max&lt;Quantity&gt;(1, instruction.quantity / settings_.iceberg_display_divisor);
+    }
+    return instruction;
+}</pre>
+
+<div class="box gist"><span class="k">The idea</span>
+<p>Generate the next plausible instruction: usually a new order near the current
+midpoint, sometimes a cancel or change to an order already waiting.</p></div>
+
+<div class="box def"><span class="k">Purpose</span>
+<p><b>Input:</b> the read-only book and IDs currently waiting.
+<b>Output:</b> one instruction. <b>Role:</b> feeds <code>order_book_random</code>,
+which calls <code>validate()</code> after every instruction.</p></div>
+
+<div class="box data"><span class="k">Sample data &mdash; 20000 instructions, seed 1</span>
+<div class="io stack">
+<div><span class="lab">out &mdash; what was generated</span>
+<pre>submitted orders
+  FOK                   568
+  ICEBERG               1234
+  IOC                   1183
+  LIMIT                 9166
+  MARKET                1139
+  POSTONLY              1773
+
+cancels and amendments
+  cancelled             1384
+  cancel too late       1591
+  amend kept place      450
+  amend requeued        418
+  amend too late        1094</pre></div>
+<div><span class="lab">out &mdash; what happened</span>
+<pre>outcomes
+  CANCELLED             783
+  FILLED                5453
+  KILLED                368
+  NEW                   6993
+  PARTIALLY_FILLED      731
+  REJECTED              735
+
+trading
+  trades                13752
+  volume                3234460
+  last price            98.81
+  high                  101.11
+  low                   98.60
+
+checks
+  invariants            clean after every instruction
+  quantity conserved    yes
+  speed                 212480 instructions/sec</pre></div>
+</div>
+<p class="fnote">"cancel too late" and "amend too late" are expected. The generator
+selected an order that had already traded, a normal race worth testing.</p></div>
+
+<p><b>What happens:</b></p>
+<ol>
+  <li>Base prices on the live midpoint, then whichever side exists, then the
+  starting price if the book is empty.</li>
+  <li>If nothing is waiting, submit because there is nothing to cancel or change.</li>
+  <li>Use a random draw to choose a cancel or change when possible.</li>
+  <li>For half of the changes, keep the price and reduce size to test queue priority.</li>
+  <li>Otherwise submit a random side, type, size, and price near the midpoint.</li>
+</ol>
+
+<div class="box why"><span class="k">Why the shrink case is forced</span>
+<p>A random new price is rarely exactly the old price. Deliberately shrinking at
+the same price gives the queue-preserving branch of <code>modify()</code> reliable
+coverage.</p></div>
+
+<div class="box why"><span class="k">Why the seed matters</span>
+<p>The seed determines the whole session. Record it, fix the bug, and rerun the
+same sequence. Reproducible failures are what make this tester useful.</p></div>
+
+<div class="box def"><span class="k">The end-of-run conservation check</span>
+<p>Every execution adds the same quantity to one buyer and one seller. Therefore,
+filled quantity across all orders must be twice the volume reported by the book:</p>
+<p>$$\sum_{\text{orders}} \text{filled}_i = 2 \times \text{volume}$$</p>
+<p class="fnote">$\text{filled}_i$ is the lifetime traded quantity for order $i$;
+volume is the book's total. If quantity is lost or invented, the two sides differ.</p></div>
+
+<div class="box flag"><span class="k">What this testing cannot find</span>
+<p>The generator is sequential and single-threaded, so it never creates two
+messages arriving at once. It cannot find race conditions between threads.</p></div>
+
+<h2 id="callgraph"><span class="sec-no">10</span>Call flow</h2>
+
+<pre>submit(side, type, price, quantity, display)
+  validate the request
+  execute(order)
+      available_quantity(...)        <span class="c">// fill-or-kill only</span>
+      best_bid() / best_ask()        <span class="c">// post-only only</span>
+      match(ladder, order, crosses, trades)
+          record_trade(trade)
+          remember_finished(maker, Filled)
+          list::splice(...)          <span class="c">// iceberg refill</span>
+      rest(order)
+
+cancel(id)
+  detach(id)
+  remember_finished(order, Cancelled)
+
+modify(id, new_price, new_quantity)
+  same price and smaller  -&gt; adjust in place, keep queue position
+  anything else           -&gt; detach(id) then execute(order)</pre>
+
+<h2 id="edges"><span class="sec-no">11</span>Cases worth checking</h2>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Situation</th><th>What would go wrong</th><th>What handles it</th></tr></thead>
+<tbody>
+<tr><td>Market order, empty book</td><td>Matching against nothing, or the order resting with no price</td><td><code>match</code> returns at once; market orders never rest, so it is marked cancelled</td></tr>
+<tr><td>Cancel of an order that just filled</td><td>Following a dangling iterator</td><td>The id is gone from <code>locators_</code>, so <code>cancel</code> returns false</td></tr>
+<tr><td>Iceberg whose slice is larger than what is left</td><td>Showing more size than the order holds</td><td><code>std::min(display_size, remaining)</code> at every refill</td></tr>
+<tr><td>Amendment that crosses the spread</td><td>A resting order silently becoming a taker with no trades recorded</td><td>The requeue path runs <code>execute()</code>, so it matches and reports its trades</td></tr>
+<tr><td>Fill-or-kill against hidden size</td><td>Killing an order that could have been filled</td><td><code>available_quantity</code> sums <code>total_quantity</code>, hidden part included</td></tr>
+<tr><td>Last order at a price is filled</td><td>An empty price level left in the map, so the book reports a price with no size</td><td>Both <code>match</code> and <code>detach</code> erase the level when its queue empties</td></tr>
+<tr><td>Two prices that look identical</td><td>Rounding making 100.25 not equal 100.25</td><td>Prices are integer ticks; no floating point anywhere in the engine</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="idioms"><span class="sec-no">12</span>C++ techniques used here</h2>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Technique</th><th>Purpose</th><th>The trap</th></tr></thead>
+<tbody>
+<tr><td><code>std::map&lt;Price, Level, std::greater&lt;Price&gt;&gt;</code></td><td>An ordered map that sorts high to low, so <code>begin()</code> is the best bid</td><td>Bids and asks are then different types, so shared code has to be a template or a generic lambda</td></tr>
+<tr><td><code>list::splice</code></td><td>Moves nodes between or within lists in constant time</td><td>Only safe because iterators survive it; the same pattern on a vector is a use-after-free</td></tr>
+<tr><td>Storing an iterator in a hash map</td><td>Turns "find this order" into a hash lookup</td><td>Every insert and erase has to keep the map in step, which is what <code>validate()</code> checks</td></tr>
+<tr><td><code>auto&amp;</code> generic lambda</td><td>One body compiled for both ladder types</td><td>Errors appear at the call site rather than in the lambda, so messages are long</td></tr>
+<tr><td><code>std::optional&lt;Price&gt;</code></td><td>"There is no best bid" without a magic number</td><td>Dereferencing without checking is undefined behaviour, so it always follows an <code>if</code></td></tr>
+<tr><td>Structured bindings in a range loop</td><td><code>for (const auto&amp; [price, level] : ladder)</code></td><td>An unused binding warns, hence the <code>(void)</code> in one loop</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="questions"><span class="sec-no">13</span>Questions the code should answer</h2>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Question</th><th>Answer</th></tr></thead>
+<tbody>
+<tr><td>Why is the price an integer?</td><td>Two prices that print identically can compare unequal as <code>double</code>, and the book compares prices constantly. Ticks are cents, so 100.25 is stored as 10025.</td></tr>
+<tr><td>Why does a taker sometimes trade against the same maker several times?</td><td>It is an iceberg. Each refilled slice is a separate execution, and other orders at that price can trade in between.</td></tr>
+<tr><td>What stops the matching loop spinning forever?</td><td>Every pass either removes the maker from the queue or reduces the taker's remaining size. Neither can happen indefinitely.</td></tr>
+<tr><td>Why keep a record of finished orders?</td><td>So <code>order(id)</code> can answer questions about an order after it has left the book. It grows for the life of the process, which is fine here and would be a rolling log in a real system.</td></tr>
+<tr><td>Where is the cost of hiding size?</td><td>In <code>match()</code>: when a slice is used up, the order is spliced to the back of the queue and loses its priority.</td></tr>
+<tr><td>What happens if the same order is amended twice quickly?</td><td>Each amendment is independent. A second one that reprices finds the order where the first one left it, because <code>locators_</code> was updated by <code>rest()</code>.</td></tr>
+</tbody>
+</table>
+</div>
+
+<h2 id="verify"><span class="sec-no">14</span>How the engine is tested</h2>
+
+<div class="scroll">
+<table>
+<thead><tr><th>Check</th><th>How it works</th><th>What it catches</th></tr></thead>
+<tbody>
+<tr><td>28 hand written tests</td><td>Each sets up a small book and asserts on trades, order of makers, and status</td><td>Rules stated wrongly: priority, price improvement, what rests and what does not</td></tr>
+<tr><td><code>validate()</code> after every instruction</td><td>The random tester calls it 20000 times per run</td><td>Cached sizes drifting, empty levels left behind, a stale or missing locator, a crossed book</td></tr>
+<tr><td>Quantity conservation</td><td>Filled summed over every order must equal twice the reported volume</td><td>Quantity lost or invented anywhere in matching or amending</td></tr>
+<tr><td>Repeatability</td><td>The same seed is run twice and the statistics compared</td><td>Hidden state or a dependence on memory addresses making runs differ</td></tr>
+<tr><td>Seed sweep</td><td><code>for s in $(seq 1 40); do ./build/order_book_random 20000 $s; done</code></td><td>A fault that only one particular sequence of instructions triggers</td></tr>
+</tbody>
+</table>
+</div>
+
+<p class="foot">Generated by <code>scripts/build_explanation.py</code> from
+<code>src/</code> and live runs of <code>order_book_sim</code> and
+<code>order_book_random</code>. Rebuild after changing the code.</p>
+
+</div>
+</body>
+</html>

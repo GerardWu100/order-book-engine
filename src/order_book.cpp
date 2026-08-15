@@ -45,10 +45,6 @@ void OrderBook::record_trade(const Trade& trade) {
     if (!statistics_.low_trade_price || trade.price < *statistics_.low_trade_price) {
         statistics_.low_trade_price = trade.price;
     }
-
-    if (trade_listener_) {
-        trade_listener_(trade);
-    }
 }
 
 void OrderBook::remember_finished(const Order& order, OrderStatus status) {

@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en-CA">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order book engine - code explanation</title>
+<script>
+  window.MathJax = { tex: { inlineMath: [['$','$'],['\\(','\\)']], displayMath: [['$$','$$'],['\\[','\\]']] } };
+</script>
+<script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js" async></script>
+<script type="module">
+  // the map diagram at the top of the page; theme follows the page palette
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+  const isLight = document.documentElement.getAttribute("data-theme") === "light";
+  mermaid.initialize({ startOnLoad: true, theme: isLight ? "neutral" : "dark",
+                       flowchart: { curve: "basis", useMaxWidth: true } });
+</script>
+<style>
+  :root{
+    /* dark is the default palette; a light override follows below */
+    --paper:#12161b; --bg:#12161b; --panel:#1b2027; --card:#1a1f26; --surface:#1a1f26; --raise:#1e242c;
+    --ink:#e9eef4; --soft:#b3bec9; --muted:#b3bec9; --faint:#828d99;
+    --line:#2c343e; --line2:#232a33;
+    --green:#6fc796; --greenbg:#14241c; --greenline:#2f4d3a;
+    --amber:#e0b365; --amberbg:#262010; --amberline:#4d3f20;
+    --blue:#87b8ee; --bluebg:#141e2b; --blueline:#2d425c;
+    --red:#e89296; --redbg:#26161a; --redline:#4f2f35;
+    --slate:#a7b1be; --slatebg:#1c2027; --slateline:#353c46;
+    --accent:#4fb9c2; --accent-ink:#6fd0d8; --accent-bg:#10262a;
+    --def:#87b8ee; --def-bg:#141e2b; --def-bd:#2d425c;
+    --why:#6fc796; --why-bg:#14241c; --why-bd:#2f4d3a;
+    --warn:#e0b365; --warn-bg:#262010; --warn-bd:#4d3f20;
+    --flag:#e89296; --flag-bg:#26161a; --flag-bd:#4f2f35;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+  }
+  :root[data-theme="light"]{
+    --paper:#faf8f4; --bg:#faf8f4; --panel:#f1ede6; --card:#ffffff; --surface:#ffffff; --raise:#fbfaf7;
+    --ink:#1b1b1b; --soft:#4a453e; --muted:#4a453e; --faint:#777067;
+    --line:#d6d0c6; --line2:#e7e2da;
+    --green:#2f6b4c; --greenbg:#e7f1ea; --greenline:#bcdac9;
+    --amber:#8f6413; --amberbg:#f6efdd; --amberline:#e3d3a8;
+    --blue:#2c5f95; --bluebg:#e7eef7; --blueline:#c3d6ea;
+    --red:#943232; --redbg:#f6eaea; --redline:#e2c4c4;
+    --slate:#525a66; --slatebg:#eceef1; --slateline:#cdd2d9;
+    --accent:#0e7c86; --accent-ink:#0b5f67; --accent-bg:#e7f4f4;
+    --def:#2c5f95; --def-bg:#e7eef7; --def-bd:#c3d6ea;
+    --why:#2f6b4c; --why-bg:#e7f1ea; --why-bd:#bcdac9;
+    --warn:#8f6413; --warn-bg:#f6efdd; --warn-bd:#e3d3a8;
+    --flag:#943232; --flag-bg:#f6eaea; --flag-bd:#e2c4c4;
+  }
+
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth;font-size:16px}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    font-size:18px;line-height:1.58;-webkit-font-smoothing:antialiased;
+    text-rendering:optimizeLegibility}
+  .wrap{padding:2.2em clamp(1em,4vw,3.2em) 5em}
+
+  h1{font-size:clamp(2.1rem,5vw,2.7rem);line-height:1.12;letter-spacing:-.02em;font-weight:800;
+    text-wrap:balance;margin:.2em 0 .2em}
+  h2{font-size:1.5rem;font-weight:750;letter-spacing:-.01em;text-wrap:balance;
+    margin:2.4em 0 .5em;padding-top:.7em;border-top:2px solid var(--line)}
+  h3{font-size:1.26rem;font-weight:700;margin:1.7em 0 .4em;color:var(--ink)}
+  h3 code{font-size:.92em}
+  h4{font-size:1rem;margin:1.3em 0 .3em;text-transform:uppercase;letter-spacing:.05em;color:var(--faint)}
+  p{margin:.7em 0}
+  ul,ol{margin:.55em 0;padding-left:1.3em}
+  li{margin:.3em 0}
+  strong,b{color:var(--ink)}
+  a{color:var(--accent-ink);text-underline-offset:2px}
+  a:hover{color:var(--accent)}
+  hr{border:none;border-top:1px solid var(--line);margin:2.5em 0}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  code{font-family:var(--mono);font-size:.9em;background:var(--panel);color:var(--ink);
+    padding:.1em .4em;border-radius:4px}
+  pre{background:var(--raise);border:1px solid var(--line);border-radius:10px;padding:1em 1.15em;
+    overflow-x:auto;font-size:.94rem;line-height:1.62;margin:1.1em 0;color:var(--ink);
+    font-family:var(--mono)}
+  pre code{background:none;padding:0;font-size:1em}
+  pre .c{color:var(--faint);font-style:italic}
+
+  .lede{font-size:1.12rem;line-height:1.48;color:var(--soft)}
+  .eyebrow{font-family:var(--mono);font-size:.78rem;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent-ink);margin:0 0 1.1em;display:flex;gap:.6em;align-items:center;flex-wrap:wrap}
+  .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+  .sec-no{font-family:var(--mono);font-size:.85rem;color:var(--accent-ink);
+    letter-spacing:.1em;display:block;margin-bottom:.15em}
+  .tag{display:inline-block;font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;
+    background:var(--greenbg);color:var(--green);border:1px solid var(--greenline);
+    padding:.25em .75em;border-radius:20px;margin-bottom:1em}
+  .big{font-size:1.42rem;font-weight:700;color:var(--green)}
+  .pill{font-variant-numeric:tabular-nums;font-weight:600}
+  .fnote{font-size:.95rem;color:var(--soft)}
+  .reads{margin:.55em 0}
+  .reads b{color:var(--soft)}
+  .foot{margin-top:3em;padding-top:1.2em;border-top:1px solid var(--line);
+    color:var(--soft);font-size:.95rem}
+
+  .box{border:1px solid var(--line);border-left-width:4px;border-radius:10px;
+    padding:1em 1.2em;margin:1.3em 0;background:var(--card)}
+  .box>:first-child{margin-top:0}.box>:last-child{margin-bottom:0}
+  .box p:first-child{margin-top:0}.box p:last-child{margin-bottom:0}
+  .box .k{font-weight:700;font-size:.82rem;text-transform:uppercase;letter-spacing:.08em;
+    display:block;margin-bottom:.45em}
+  .def{border-left-color:var(--def);background:var(--def-bg)}.def .k{color:var(--def)}
+  .gist{border-left-color:var(--accent);background:var(--accent-bg)}.gist .k{color:var(--accent-ink)}
+  .why{border-left-color:var(--why);background:var(--why-bg)}.why .k{color:var(--why)}
+  .warn{border-left-color:var(--warn);background:var(--warn-bg)}.warn .k{color:var(--warn)}
+  .flag{border-left-color:var(--flag);background:var(--flag-bg)}.flag .k{color:var(--flag)}
+  .data{border-left-color:var(--slate);background:var(--slatebg)}.data .k{color:var(--slate)}
+  .io{display:grid;grid-template-columns:1fr 1fr;gap:.9em}
+  .io.stack{grid-template-columns:1fr}
+  @media (max-width:820px){.io{grid-template-columns:1fr}}
+  .io .lab{font-family:var(--mono);font-size:.74rem;letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);font-weight:700}
+  .io pre{margin:.25em 0 0;font-size:.8rem;line-height:1.5}
+  .data>p{font-size:.95rem}
+
+  .toc{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+    padding:1.1em 1.4em;margin:1.8em 0}
+  .toc .rk{font-family:var(--mono);font-size:.76rem;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--faint);margin-bottom:.5em}
+  .toc ol{margin:.35em 0 0;padding-left:1.4em}
+  .toc a{text-decoration:none;color:var(--ink)}
+  .toc a:hover{color:var(--accent-ink)}
+
+  .scroll{overflow-x:auto;margin:1.2em 0}
+  table{border-collapse:collapse;width:100%;margin:1.2em 0;font-size:1rem;background:var(--card);
+    font-variant-numeric:tabular-nums}
+  .scroll table{margin:0}
+  th,td{border:1px solid var(--line);padding:.55em .75em;text-align:left;vertical-align:top}
+  th,thead th{background:var(--panel);color:var(--ink);font-weight:700}
+  td.n,th.n{text-align:right}
+  .pass{color:var(--green);font-weight:700}
+  .failw{color:var(--red);font-weight:700}
+
+  .chip{display:inline-block;font-size:.74rem;font-weight:700;text-transform:uppercase;
+    letter-spacing:.06em;padding:.15em .55em;border-radius:4px;white-space:nowrap;border:1px solid}
+  .c-veto{background:var(--redbg);color:var(--red);border-color:var(--redline)}
+  .c-drop{background:var(--amberbg);color:var(--amber);border-color:var(--amberline)}
+  .c-never{background:var(--slatebg);color:var(--slate);border-color:var(--slateline)}
+  .c-bug{background:var(--bluebg);color:var(--blue);border-color:var(--blueline)}
+  .legend{display:flex;flex-wrap:wrap;gap:.5em 1.1em;margin:1em 0 0;font-size:.92rem;color:var(--soft)}
+  .legend span.chip{margin-right:.4em}
+
+  figure{margin:1.6em 0;text-align:center}
+  /* charts are rendered on white canvases; keep the white plate but soften the glare */
+  figure img{max-width:100%;height:auto;border:1px solid var(--line);border-radius:8px;
+    background:#fff;padding:6px}
+  :root:not([data-theme="light"]) figure img{filter:brightness(.94) contrast(1.02)}
+  figcaption{font-size:.92rem;color:var(--soft);margin-top:.6em;
+    margin-left:auto;margin-right:auto}
+
+  /* the map diagram sits on its own plate and scrolls sideways rather than the page */
+  .mermaid{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:1.2em;margin:1.4em 0;overflow-x:auto;text-align:center;
+    font-family:var(--sans)}
+  .mermaid svg{max-width:100%;height:auto}
+
+  /* rendered maths inherits the page colour instead of MathJax's own default */
+  mjx-container,.katex{color:inherit}
+  mjx-container[display="true"],.katex-display{overflow-x:auto;overflow-y:hidden;padding:.15em 0}
+</style>
+</head><body>

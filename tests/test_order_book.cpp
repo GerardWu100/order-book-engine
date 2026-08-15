@@ -400,21 +400,6 @@ void test_quantity_queries() {
     CHECK(book.available_quantity(Side::Sell, px("100.20"), false) == 1000);
 }
 
-// A trade listener sees every execution as it happens.
-void test_trade_listener_sees_every_fill() {
-    OrderBook            book;
-    std::vector<obe::Trade> seen;
-    book.set_trade_listener([&](const obe::Trade& trade) { seen.push_back(trade); });
-
-    book.submit(Side::Sell, OrderType::Limit, px("100.30"), 100);
-    book.submit(Side::Sell, OrderType::Limit, px("100.35"), 100);
-    book.submit(Side::Buy, OrderType::Limit, px("100.40"), 150);
-
-    CHECK(seen.size() == 2);
-    CHECK(seen[0].price == px("100.30"));
-    CHECK(seen[1].quantity == 50);
-}
-
 // ---------------------------------------------------------- housekeeping
 
 // Prices survive the round trip between text and integer ticks.
@@ -611,7 +596,6 @@ int main() {
     test_statistics_follow_the_trades();
     test_spread_and_mid_price();
     test_quantity_queries();
-    test_trade_listener_sees_every_fill();
     test_price_formatting();
     test_invalid_orders_throw();
     test_validate_is_quiet_on_a_healthy_book();

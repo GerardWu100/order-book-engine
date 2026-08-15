@@ -1,15 +1,19 @@
 // random_main.cpp - random order flow tester.
 //
-// Generates a stream of random orders, cancels and amendments from config.toml,
-// runs them through the book, checks the book's internal invariants along the
-// way, and prints a summary.
+// Generates a stream of random orders, cancels and amendments, runs them
+// through the book, checks the book's internal invariants along the way, and
+// prints a summary.
 //
 // Usage:
-//   ./build/order_book_random [config file] [seed override]
+//   ./build/order_book_random [instructions] [seed]
 //
-// The seed override is there so you can sweep many sessions from a shell loop
-// without editing the config file.
+// Both arguments are optional. The same seed always replays the same session,
+// so a failure can be reproduced exactly.
+//
+// Exit code 0 means the book stayed consistent and no quantity was lost or
+// invented, so this can be used directly in a loop over many seeds.
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <iomanip>
@@ -18,12 +22,25 @@
 #include <string>
 #include <vector>
 
-#include "config.hpp"
 #include "order.hpp"
 #include "order_book.hpp"
 #include "random_flow.hpp"
 
 namespace {
+
+constexpr std::size_t kDefaultInstructions = 20000;
+constexpr std::uint64_t kDefaultSeed       = 1;
+
+// Price levels printed per side at the end.
+constexpr std::size_t kDepth = 5;
+
+// Drop ids that have left the book from the pool of cancel and amend targets
+// every this many instructions. Without it the generator would spend most of
+// its cancels on orders that are already gone.
+constexpr std::size_t kCompactEvery = 500;
+
+// Print a progress line this often.
+constexpr std::size_t kProgressEvery = 5000;
 
 constexpr int kLabelWidth  = 22;
 constexpr int kColumnWidth = 12;
@@ -32,8 +49,8 @@ constexpr int kColumnWidth = 12;
 struct SessionCounts {
     std::map<std::string, std::size_t> submitted_by_type;
     std::map<std::string, std::size_t> outcome_by_status;
-    std::size_t cancels_accepted = 0;
-    std::size_t cancels_missed   = 0;  // the order was already gone
+    std::size_t cancels_accepted       = 0;
+    std::size_t cancels_missed         = 0;  // the order was already gone
     std::size_t modifies_kept_priority = 0;
     std::size_t modifies_requeued      = 0;
     std::size_t modifies_missed        = 0;
@@ -48,9 +65,9 @@ void print_row(const std::string& label, long long value) {
     print_row(label, std::to_string(value));
 }
 
-void print_book(const obe::OrderBook& book, std::size_t depth) {
-    const auto bids = book.snapshot(obe::Side::Buy, depth);
-    const auto asks = book.snapshot(obe::Side::Sell, depth);
+void print_book(const obe::OrderBook& book) {
+    const auto bids = book.snapshot(obe::Side::Buy, kDepth);
+    const auto asks = book.snapshot(obe::Side::Sell, kDepth);
 
     std::cout << "  " << std::right << std::setw(kColumnWidth) << "bid size"
               << std::setw(kColumnWidth) << "bid" << std::setw(kColumnWidth) << "ask"
@@ -73,8 +90,8 @@ void print_book(const obe::OrderBook& book, std::size_t depth) {
     }
 }
 
-// Drop ids that are no longer resting, so the pool the generator picks from
-// stays mostly live. Filled orders leave the book without telling us.
+// Drop ids that are no longer resting. Filled orders leave the book without
+// telling us, so the pool goes stale on its own.
 void compact(const obe::OrderBook& book, std::vector<obe::OrderId>& resting_ids) {
     std::vector<obe::OrderId> live;
     live.reserve(resting_ids.size());
@@ -104,35 +121,12 @@ bool book_is_healthy(const obe::OrderBook& book, std::size_t step) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    const std::string config_path = argc > 1 ? argv[1] : "config.toml";
-
-    obe::Config config;
-    try {
-        config = obe::Config::from_file(config_path);
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << "\n";
-        std::cerr << "run this from the project root, or pass the path to config.toml\n";
-        return 1;
-    }
-
     obe::FlowSettings settings;
-    std::size_t       depth = 0, validate_every = 0, compact_every = 0, progress_every = 0;
-    try {
-        settings       = obe::FlowSettings::from_config(config);
-        depth          = static_cast<std::size_t>(config.integer("report.depth"));
-        validate_every = static_cast<std::size_t>(config.integer("report.validate_every"));
-        compact_every  = static_cast<std::size_t>(config.integer("report.compact_every"));
-        progress_every = static_cast<std::size_t>(config.integer("report.progress_every"));
-    } catch (const std::exception& error) {
-        std::cerr << error.what() << "\n";
-        return 1;
-    }
+    settings.instruction_count =
+        argc > 1 ? static_cast<std::size_t>(std::stoull(argv[1])) : kDefaultInstructions;
+    settings.seed = argc > 2 ? std::stoull(argv[2]) : kDefaultSeed;
 
-    if (argc > 2) {
-        settings.seed = std::stoull(argv[2]);
-    }
-
-    obe::OrderBook book;
+    obe::OrderBook  book;
     obe::RandomFlow flow(settings);
 
     SessionCounts             counts;
@@ -140,9 +134,8 @@ int main(int argc, char** argv) {
     std::vector<obe::OrderId> every_id;     // every id ever created, for the audit below
 
     std::cout << "random order flow\n";
-    print_row("seed", static_cast<long long>(settings.seed));
     print_row("instructions", static_cast<long long>(settings.instruction_count));
-    print_row("starting mid", obe::format_price(settings.starting_mid_price));
+    print_row("seed", static_cast<long long>(settings.seed));
     std::cout << "\n";
 
     const auto started = std::chrono::steady_clock::now();
@@ -188,25 +181,22 @@ int main(int argc, char** argv) {
             }
         }
 
-        if (validate_every > 0 && step % validate_every == 0 && !book_is_healthy(book, step)) {
+        // The book is checked after every single instruction, which is the
+        // whole point of this tool.
+        if (!book_is_healthy(book, step)) {
             return 1;
         }
-        if (compact_every > 0 && step % compact_every == 0) {
+        if (step % kCompactEvery == 0) {
             compact(book, resting_ids);
         }
-        if (progress_every > 0 && step % progress_every == 0) {
+        if (step % kProgressEvery == 0) {
             std::cout << "  " << step << " instructions, " << book.statistics().trade_count
                       << " trades, " << book.resting_order_count() << " resting\n";
         }
     }
 
-    const auto finished = std::chrono::steady_clock::now();
-    const double seconds =
-        std::chrono::duration<double>(finished - started).count();
-
-    if (!book_is_healthy(book, settings.instruction_count)) {
-        return 1;
-    }
+    const auto   finished = std::chrono::steady_clock::now();
+    const double seconds  = std::chrono::duration<double>(finished - started).count();
 
     // Conservation check. Every execution adds the same quantity to a buyer and
     // a seller, so the filled quantity summed over all orders must be exactly
@@ -249,16 +239,14 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "\nfinal book\n";
-    print_book(book, depth);
+    print_book(book);
     if (const auto spread = book.spread()) {
         print_row("spread", obe::format_price(*spread));
     }
     print_row("resting orders", static_cast<long long>(book.resting_order_count()));
-    print_row("bid quantity", static_cast<long long>(book.resting_quantity(obe::Side::Buy)));
-    print_row("ask quantity", static_cast<long long>(book.resting_quantity(obe::Side::Sell)));
 
     std::cout << "\nchecks\n";
-    print_row("invariants", "clean");
+    print_row("invariants", "clean after every instruction");
     print_row("quantity conserved",
               filled_across_all_orders == expected
                   ? "yes"

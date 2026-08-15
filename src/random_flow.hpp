@@ -19,37 +19,43 @@
 #include <random>
 #include <vector>
 
-#include "config.hpp"
 #include "order.hpp"
 #include "order_book.hpp"
 
 namespace obe {
 
-// Everything that shapes the generated flow. Read from config.toml so the mix
-// can be retuned without recompiling.
+// Everything that shapes the generated flow. The defaults produce a busy two
+// sided book around 100.00; the two that usually matter, the seed and the
+// number of instructions, are set from the command line.
 struct FlowSettings {
-    std::uint64_t seed                    = 1;
-    std::size_t   instruction_count       = 5000;
-    Price         starting_mid_price      = 100 * kTicksPerUnit;
-    Price         price_band_ticks        = 20;   // how far from the midpoint prices land
-    Quantity      min_quantity            = 100;
-    Quantity      max_quantity            = 1000;
-    std::int64_t  iceberg_display_divisor = 4;    // display size = quantity / this
-    double        cancel_share            = 0.15; // share of instructions that cancel
-    double        modify_share            = 0.10; // share that amend a resting order
+    std::uint64_t seed              = 1;
+    std::size_t   instruction_count = 20000;
+
+    // Midpoint used only while the book is empty. Once there are prices on
+    // both sides, orders are placed around the live midpoint instead.
+    Price starting_mid_price = 100 * kTicksPerUnit;
+
+    // How far from the midpoint a generated price can land, in ticks.
+    Price price_band_ticks = 20;
+
+    Quantity min_quantity = 100;
+    Quantity max_quantity = 1000;
+
+    // Iceberg display size = quantity / this, so 4 shows a quarter.
+    std::int64_t iceberg_display_divisor = 4;
+
+    double cancel_share = 0.15;  // share of instructions that cancel
+    double modify_share = 0.10;  // share that amend a resting order
 
     // Share of amendments that keep the price and only shrink the order. That
     // is the one amendment that keeps its place in the queue, so without this
     // the generator would almost never exercise that path: a random new price
     // is hardly ever equal to the old one.
-    double        modify_shrink_share     = 0.50;
+    double modify_shrink_share = 0.50;
 
     // One weight per OrderType, indexed by the enum value. Relative, not
     // percentages; the generator normalises them.
     std::array<double, kOrderTypeCount> type_weights{{60, 8, 8, 4, 8, 12}};
-
-    // Read every field from a Config. Throws if a key is missing.
-    static FlowSettings from_config(const Config& config);
 };
 
 // One generated instruction. `kind` says which fields matter.

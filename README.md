@@ -1,13 +1,13 @@
 # Order Book Engine
 
-A C++20 limit order book that matches orders by price and then by arrival time.
-It supports the order types and maintenance operations needed for a small,
-in-memory matching engine.
+A C++20 limit order book that matches orders by price, then by arrival time.
+It supports the order types and book operations needed for a small, in-memory
+matching engine.
 
 This is a personal learning project. It handles one instrument on one thread.
-It includes three programs:
+It builds three programs:
 
-- `order_book_tests` runs 29 plain-assert test cases.
+- `order_book_tests` runs 28 tests with plain assertions.
 - `order_book_sim` replays a hand-written session file.
 - `order_book_random` generates random activity and checks the book after every
   instruction.
@@ -20,8 +20,8 @@ cmake --build build -j
 
 ./build/order_book_tests                        # run the tests
 ./build/order_book_sim data/sample_session.txt  # replay the sample session
-./build/order_book_random config.toml           # run random order flow
-./build/order_book_random config.toml 4242      # use seed 4242
+./build/order_book_random                       # 20000 random instructions
+./build/order_book_random 50000 4242            # 50000 instructions, seed 4242
 ```
 
 ## Supported operations
@@ -29,31 +29,29 @@ cmake --build build -j
 | Operation | Description |
 | --- | --- |
 | `submit` | Add an order and match it immediately against the other side |
-| `cancel` | Remove a resting order from the book |
-| `modify` | Change a resting order's price or quantity, applying queue-priority rules |
-| `order` | Look up an order's status, filled quantity, remaining quantity, and whether it is still resting |
-| `best_bid`, `best_ask`, `spread`, `mid_price` | Read the top of the book |
+| `cancel` | Remove an order that is still waiting in the book |
+| `modify` | Change a waiting order's price or quantity, following queue-priority rules |
+| `order` | Look up an order's status, filled quantity, remaining quantity, and whether it is still waiting |
+| `best_bid`, `best_ask`, `spread`, `mid_price` | Read the best prices and the gap between them |
 | `snapshot` | Read the top N price levels on one side |
-| `quantity_at_price`, `resting_quantity`, `available_quantity` | Read available size, including hidden iceberg size |
+| `quantity_at_price`, `resting_quantity`, `available_quantity` | Read available quantity, including hidden iceberg quantity |
 | `statistics` | Read the last trade price, traded volume, trade count, high, and low |
-| `set_trade_listener` | Receive a callback for every execution |
-| `validate` | Check all internal invariants; the random tester calls this constantly |
+| `validate` | Check every internal rule; the random tester calls this constantly |
 
 ### Order types
 
 | Type | Behavior |
 | --- | --- |
 | Limit | Trades what it can; the remainder waits in the book |
-| Market | Takes available orders at any price and never rests |
+| Market | Takes available orders at any price and never waits in the book |
 | IOC (immediate-or-cancel) | Trades what is available now and cancels the remainder |
 | FOK (fill-or-kill) | Trades the full quantity at once or does nothing |
-| Iceberg | A limit order that displays only part of its total quantity |
-| Post-only | Rests, or is rejected if it would trade immediately |
+| Iceberg | A limit order that shows only part of its total quantity |
+| Post-only | Waits in the book, or is rejected if it would trade immediately |
 
 ### Order status
 
-`order(id)` continues to report an order's status after the order leaves the
-book.
+`order(id)` continues to report an order's status after it leaves the book.
 
 ```text
 New -> PartiallyFilled -> Filled
@@ -66,8 +64,8 @@ Rejected                              post-only that would have traded
 ### Important matching rules
 
 - **FOK includes hidden iceberg quantity.** Before trading, the engine totals
-  all resting quantity at or better than the limit price. If that total is too
-  small, the order is rejected and the book is unchanged.
+  all quantity at or better than the limit price. If that total is too small,
+  the order is rejected and the book is unchanged.
 - **A refilled iceberg goes to the back of its price queue.** A partly consumed
   displayed slice keeps its place. Once the slice is fully consumed, the next
   slice joins the back of the queue.
@@ -76,8 +74,8 @@ Rejected                              post-only that would have traded
 
 ## Session files
 
-The simulator reads one instruction per line. Blank lines and lines beginning
-with `#` are ignored.
+The simulator reads one instruction per line. It ignores blank lines and lines
+that begin with `#`.
 
 ```text
 LIMIT    BUY|SELL  <price>  <quantity>
@@ -103,32 +101,33 @@ current midpoint. After every instruction, it checks that:
 - the book is not crossed;
 - each price level's cached quantities match its orders;
 - there are no empty levels or zero-quantity orders; and
-- every resting order is still available through the ID lookup.
+- every waiting order is still available through the ID lookup.
 
 It also checks quantity conservation at the end. Every execution adds the same
-quantity to one buyer and one seller, so the total filled quantity must equal
-twice the traded volume.
+quantity to one buyer and one seller, so total filled quantity must equal twice
+the traded volume.
 
-The seed, instruction count, order-type mix, price band, quantity range, and
-cancel/amend rates are all in `config.toml`. A seed fully determines a session,
-so a failure can be reproduced by recording the seed and running it again.
+The instruction count and seed are command-line arguments. The rest of the mix
+lives in `FlowSettings` in `src/random_flow.hpp`. A seed fully determines a
+session, so record it to reproduce a failure. The exit code is non-zero if
+anything goes wrong, which makes a sweep easy:
 
-A 500,000-instruction session takes about 0.16 seconds and remains consistent
-throughout.
+```bash
+for s in $(seq 1 40); do ./build/order_book_random 20000 $s > /dev/null || echo "seed $s failed"; done
+```
 
 ```text
 submitted orders                cancels and amendments
-  FOK       604                   cancelled          1327
-  ICEBERG  1138                   cancel too late    1675
-  IOC      1184                   amend kept place    431
-  LIMIT    9057                   amend requeued      439
-  MARKET   1161                   amend too late     1123
-  POSTONLY 1900
+  FOK        568                  cancelled          1384
+  ICEBERG   1234                  cancel too late    1591
+  IOC       1183                  amend kept place    450
+  LIMIT     9166                  amend requeued      418
+  MARKET    1139                  amend too late     1094
+  POSTONLY  1773
 ```
 
-The midpoint moves during the session because new prices are based on the
-current book, not the starting price. That behavior is a random walk, not an
-error.
+The midpoint moves during the session because new prices use the current book,
+not the starting price. That is a random walk, not an error.
 
 ## Data structure
 
@@ -151,7 +150,7 @@ The book uses three structures:
    matching starts at the front. Refilling an iceberg moves it to the back in
    constant time without copying orders or invalidating iterators.
 3. **A hash map for fast cancels.** Each order ID points to its exact queue
-   position, so the engine can remove an order from the middle without a scan.
+   position, so the engine can remove an order from the middle without scanning.
 
 Prices are stored as integer cents, never as `double`. Floating-point values
 that print the same can still compare differently, which is unsafe for a book
@@ -166,7 +165,7 @@ Here, `n` is the number of distinct prices in the book.
 | Add an order that does not trade | O(log n) to find the price, O(1) to queue it |
 | Cancel | O(log n) to find the price, O(1) to remove it |
 | Amend with a same-price quantity reduction | O(1) after the lookup |
-| Match one resting order | O(1) |
+| Match one waiting order | O(1) |
 | Read the best bid or offer | O(1) |
 
 ## Files
@@ -175,21 +174,33 @@ Here, `n` is the number of distinct prices in the book.
 src/order.hpp        side, order type, status, order, and trade types
 src/order.cpp        price parsing and formatting
 src/order_book.hpp   book interface and data-structure notes
-src/order_book.cpp   matching, resting, cancelling, amending, validation
-src/config.hpp/.cpp  reader for the TOML subset used by config.toml
+src/order_book.cpp   matching, waiting, cancelling, amending, validation
 src/random_flow.*    random order generator
 src/main.cpp         session-file replay tool
 src/random_main.cpp  random-flow tester
-tests/               29 cases using plain asserts
-config.toml          random-tester settings
+tests/               28 cases using plain asserts
+scripts/             builds the explanation page from the source and live runs
+docs/html/           the explanation page
 data/                sample session
+```
+
+## How it works, explained
+
+`docs/html/order_book_explained.html` walks through the engine function by
+function. It includes a connection diagram, the source for each function, and
+real input and output captured by running the engine. Open it in a browser.
+
+Rebuild it after changing the code:
+
+```bash
+uv run python scripts/build_explanation.py
 ```
 
 ## Out of scope
 
 The engine does not include self-trade prevention, stop or pegged orders,
-auctions, persistence, threading, or networking. `submit` returns trades and
-the trade listener receives them; there is no real market-data feed.
+auctions, persistence, threading, or networking. `submit` returns the trades it
+caused; there is no market-data feed.
 
 Finished orders remain in memory for the life of the process. That is useful for
 a simulator, but a production system would usually keep a rolling history.

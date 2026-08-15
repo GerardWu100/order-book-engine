@@ -3,52 +3,8 @@
 #include "random_flow.hpp"
 
 #include <algorithm>
-#include <stdexcept>
 
 namespace obe {
-
-FlowSettings FlowSettings::from_config(const Config& config) {
-    FlowSettings settings;
-    settings.seed = static_cast<std::uint64_t>(config.integer("flow.seed"));
-    settings.instruction_count =
-        static_cast<std::size_t>(config.integer("flow.instruction_count"));
-    settings.starting_mid_price      = parse_price(config.text("flow.starting_mid_price"));
-    settings.price_band_ticks        = config.integer("flow.price_band_ticks");
-    settings.min_quantity            = config.integer("flow.min_quantity");
-    settings.max_quantity            = config.integer("flow.max_quantity");
-    settings.iceberg_display_divisor = config.integer("flow.iceberg_display_divisor");
-    settings.cancel_share            = config.decimal("flow.cancel_share");
-    settings.modify_share            = config.decimal("flow.modify_share");
-    settings.modify_shrink_share     = config.decimal("flow.modify_shrink_share");
-
-    settings.type_weights[static_cast<std::size_t>(OrderType::Limit)] =
-        config.decimal("flow.weights.limit");
-    settings.type_weights[static_cast<std::size_t>(OrderType::Market)] =
-        config.decimal("flow.weights.market");
-    settings.type_weights[static_cast<std::size_t>(OrderType::ImmediateOrCancel)] =
-        config.decimal("flow.weights.ioc");
-    settings.type_weights[static_cast<std::size_t>(OrderType::FillOrKill)] =
-        config.decimal("flow.weights.fok");
-    settings.type_weights[static_cast<std::size_t>(OrderType::Iceberg)] =
-        config.decimal("flow.weights.iceberg");
-    settings.type_weights[static_cast<std::size_t>(OrderType::PostOnly)] =
-        config.decimal("flow.weights.post_only");
-
-    if (settings.min_quantity <= 0 || settings.max_quantity < settings.min_quantity) {
-        throw std::runtime_error("flow.min_quantity and flow.max_quantity are not a valid range");
-    }
-    if (settings.price_band_ticks <= 0) {
-        throw std::runtime_error("flow.price_band_ticks must be positive");
-    }
-    if (settings.iceberg_display_divisor <= 0) {
-        throw std::runtime_error("flow.iceberg_display_divisor must be positive");
-    }
-    if (settings.cancel_share < 0 || settings.modify_share < 0 ||
-        settings.cancel_share + settings.modify_share >= 1.0) {
-        throw std::runtime_error("flow.cancel_share plus flow.modify_share must stay below 1");
-    }
-    return settings;
-}
 
 RandomFlow::RandomFlow(const FlowSettings& settings)
     : settings_(settings),
