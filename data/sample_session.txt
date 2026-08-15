@@ -1,0 +1,33 @@
+# Sample session. Run with:
+#   ./build/order_book_sim data/sample_session.txt
+#
+# Format: TYPE SIDE PRICE QUANTITY [DISPLAY]
+# Market orders use "-" as the price.
+
+# Build a two sided book.
+LIMIT BUY 100.20 400
+LIMIT BUY 100.25 600
+LIMIT SELL 100.35 500
+LIMIT SELL 100.40 700
+BOOK
+
+# A seller hidden behind a small displayed slice.
+ICEBERG SELL 100.30 5000 300
+BOOK
+
+# A market buy eats the visible slice, the iceberg refills.
+MARKET BUY - 400
+BOOK
+
+# Not enough liquidity at or below 100.30 for the whole size, so this is killed.
+FOK BUY 100.30 9000
+
+# Enough liquidity, so this one fills completely.
+FOK BUY 100.30 1000
+
+# Takes what it can at 100.25 and drops the rest.
+IOC SELL 100.25 900
+BOOK
+
+# Cancel the resting bid at 100.20 (order 1).
+CANCEL 1
