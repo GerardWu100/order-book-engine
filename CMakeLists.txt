@@ -11,16 +11,24 @@ endif()
 
 add_compile_options(-Wall -Wextra -Wpedantic)
 
-# Matching engine, shared by the command line tool and the tests.
+# Matching engine plus the config reader and random flow generator, shared by
+# both command line tools and the tests.
 add_library(order_book
   src/order.cpp
   src/order_book.cpp
+  src/config.cpp
+  src/random_flow.cpp
 )
 target_include_directories(order_book PUBLIC src)
 
-# Reads a session file of instructions and prints trades and the book.
+# Replays a session file of hand written instructions.
 add_executable(order_book_sim src/main.cpp)
 target_link_libraries(order_book_sim PRIVATE order_book)
+
+# Generates random order flow from config.toml and checks the book after every
+# instruction.
+add_executable(order_book_random src/random_main.cpp)
+target_link_libraries(order_book_random PRIVATE order_book)
 
 enable_testing()
 add_executable(order_book_tests tests/test_order_book.cpp)

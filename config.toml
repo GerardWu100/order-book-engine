@@ -1,0 +1,64 @@
+# Settings for the random order flow tester (./build/order_book_random).
+# Nothing else in the project reads this file.
+
+[flow]
+# Seed for the random generator. The same seed always replays the same session,
+# so a failure can be reproduced exactly. Override it on the command line with
+# the second argument.
+seed = 20260815
+
+# How many instructions (submit, cancel or amend) to generate.
+instruction_count = 20000
+
+# Midpoint used only while the book is empty. Once there are prices on both
+# sides, new orders are placed around the live midpoint instead.
+starting_mid_price = "100.00"
+
+# How far from the midpoint a generated price can land, in ticks (cents).
+# Larger values mean a wider, thinner book and fewer trades.
+price_band_ticks = 20
+
+# Order size range, inclusive.
+min_quantity = 100
+max_quantity = 1000
+
+# Iceberg display size = quantity / this. 4 means a quarter is shown.
+iceberg_display_divisor = 4
+
+# Share of instructions that cancel a resting order, and share that amend one.
+# Both are fractions of 1 and together must stay below 1. The rest are new
+# orders.
+cancel_share = 0.15
+modify_share = 0.10
+
+# Share of amendments that keep the price and only cut the size. That is the
+# only amendment that keeps its place in the queue, so a low value here leaves
+# that path barely tested. The rest reprice, which requeues the order.
+modify_shrink_share = 0.50
+
+[flow.weights]
+# Relative weights for the order type of each new order. They do not need to
+# add up to anything in particular; only their ratios matter.
+limit     = 60
+market    = 8
+ioc       = 8
+fok       = 4
+iceberg   = 8
+post_only = 12
+
+[report]
+# Price levels shown per side in the printed book.
+depth = 5
+
+# Run the full internal consistency check every N instructions. 1 checks after
+# every single instruction, which is the strictest and the slowest. 0 disables
+# the check.
+validate_every = 1
+
+# Every N instructions, drop ids that have left the book from the pool the
+# generator picks cancel and amend targets from. 0 disables it, which makes
+# cancels increasingly hit orders that are already gone.
+compact_every = 500
+
+# Print a one line progress update every N instructions. 0 disables it.
+progress_every = 5000

@@ -5,13 +5,17 @@
 //
 // Line formats, fields separated by spaces:
 //
-//   LIMIT   BUY|SELL  <price>  <quantity>
-//   MARKET  BUY|SELL  -        <quantity>
-//   IOC     BUY|SELL  <price>  <quantity>
-//   FOK     BUY|SELL  <price>  <quantity>
-//   ICEBERG BUY|SELL  <price>  <quantity>  <display size>
-//   CANCEL  <order id>
+//   LIMIT    BUY|SELL  <price>  <quantity>
+//   MARKET   BUY|SELL  -        <quantity>
+//   IOC      BUY|SELL  <price>  <quantity>
+//   FOK      BUY|SELL  <price>  <quantity>
+//   POSTONLY BUY|SELL  <price>  <quantity>
+//   ICEBERG  BUY|SELL  <price>  <quantity>  <display size>
+//   CANCEL   <order id>
+//   MODIFY   <order id>  <new price>  <new quantity>
+//   STATUS   <order id>
 //   BOOK
+//   STATS
 //
 // Blank lines and lines starting with '#' are ignored.
 
@@ -52,6 +56,14 @@ void print_trades(const obe::SubmitResult& result) {
     }
 }
 
+void print_result(const obe::SubmitResult& result) {
+    std::cout << "  order " << result.id << " " << obe::to_string(result.status) << "\n";
+    print_trades(result);
+    if (result.resting) {
+        std::cout << "  remainder resting in the book\n";
+    }
+}
+
 void print_book(const obe::OrderBook& book, std::size_t depth) {
     const auto bids = book.snapshot(obe::Side::Buy, depth);
     const auto asks = book.snapshot(obe::Side::Sell, depth);
@@ -76,9 +88,33 @@ void print_book(const obe::OrderBook& book, std::size_t depth) {
     }
 
     if (const auto spread = book.spread()) {
-        std::cout << "  spread " << obe::format_price(*spread) << "\n";
+        std::cout << "  spread " << obe::format_price(*spread) << ", mid "
+                  << obe::format_price(*book.mid_price()) << "\n";
     }
     std::cout << "  resting orders " << book.resting_order_count() << "\n";
+}
+
+void print_statistics(const obe::OrderBook& book) {
+    const obe::MarketStatistics& stats = book.statistics();
+    std::cout << "  trades " << stats.trade_count << ", volume " << stats.traded_volume << "\n";
+    if (stats.last_trade_price) {
+        std::cout << "  last " << obe::format_price(*stats.last_trade_price) << ", high "
+                  << obe::format_price(*stats.high_trade_price) << ", low "
+                  << obe::format_price(*stats.low_trade_price) << "\n";
+    }
+}
+
+void print_status(const obe::OrderBook& book, obe::OrderId id) {
+    const auto state = book.order(id);
+    if (!state) {
+        std::cout << "  no such order\n";
+        return;
+    }
+    std::cout << "  " << obe::to_string(state->side) << " " << obe::to_string(state->type) << " "
+              << obe::format_price(state->price) << " " << obe::to_string(state->status)
+              << ", filled " << state->filled_quantity << " of " << state->original_quantity
+              << ", left " << state->remaining_quantity
+              << (state->resting ? ", resting\n" : ", not in the book\n");
 }
 
 // Run one instruction line. Unknown or malformed lines report an error and are
@@ -87,18 +123,47 @@ void run_line(obe::OrderBook& book, const std::string& line, std::size_t depth) 
     std::istringstream fields(line);
     std::string        command;
     fields >> command;
+    std::cout << line << "\n";
 
     if (command == "BOOK") {
-        std::cout << line << "\n";
         print_book(book, depth);
+        return;
+    }
+
+    if (command == "STATS") {
+        print_statistics(book);
         return;
     }
 
     if (command == "CANCEL") {
         obe::OrderId id = 0;
         fields >> id;
-        std::cout << line << "\n";
         std::cout << (book.cancel(id) ? "  cancelled\n" : "  cancel rejected, unknown order\n");
+        return;
+    }
+
+    if (command == "STATUS") {
+        obe::OrderId id = 0;
+        fields >> id;
+        print_status(book, id);
+        return;
+    }
+
+    if (command == "MODIFY") {
+        obe::OrderId  id = 0;
+        std::string   price_text;
+        obe::Quantity quantity = 0;
+        fields >> id >> price_text >> quantity;
+
+        const obe::ModifyResult result =
+            book.modify(id, obe::parse_price(price_text), quantity);
+        if (!result.found) {
+            std::cout << "  amend rejected, order is not resting\n";
+            return;
+        }
+        std::cout << (result.kept_queue_position ? "  size reduced, kept its place in the queue\n"
+                                                 : "  requeued at the back of the price level\n");
+        print_result(result.outcome);
         return;
     }
 
@@ -113,37 +178,23 @@ void run_line(obe::OrderBook& book, const std::string& line, std::size_t depth) 
         type = obe::OrderType::FillOrKill;
     } else if (command == "ICEBERG") {
         type = obe::OrderType::Iceberg;
+    } else if (command == "POSTONLY") {
+        type = obe::OrderType::PostOnly;
     } else {
-        std::cout << "  ignored, unknown command: " << line << "\n";
+        std::cout << "  ignored, unknown command\n";
         return;
     }
 
-    std::string     side_text, price_text;
-    obe::Quantity   quantity = 0;
-    obe::Quantity   display  = 0;
+    std::string   side_text, price_text;
+    obe::Quantity quantity = 0;
+    obe::Quantity display  = 0;
     fields >> side_text >> price_text >> quantity;
     if (type == obe::OrderType::Iceberg) {
         fields >> display;
     }
 
-    const obe::Price price =
-        price_text == "-" ? obe::kNoPrice : obe::parse_price(price_text);
-
-    const obe::SubmitResult result =
-        book.submit(parse_side(side_text), type, price, quantity, display);
-
-    std::cout << line << "\n";
-    if (result.killed) {
-        std::cout << "  order " << result.id
-                  << " killed, not enough liquidity for the full size\n";
-        return;
-    }
-
-    std::cout << "  order " << result.id << " accepted\n";
-    print_trades(result);
-    if (result.resting) {
-        std::cout << "  remainder resting in the book\n";
-    }
+    const obe::Price price = price_text == "-" ? obe::kNoPrice : obe::parse_price(price_text);
+    print_result(book.submit(parse_side(side_text), type, price, quantity, display));
 }
 
 }  // namespace
@@ -177,5 +228,6 @@ int main(int argc, char** argv) {
 
     std::cout << "\nfinal book\n";
     print_book(book, depth);
+    print_statistics(book);
     return 0;
 }

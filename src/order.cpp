@@ -18,6 +18,19 @@ std::string to_string(OrderType type) {
         case OrderType::ImmediateOrCancel: return "IOC";
         case OrderType::FillOrKill:        return "FOK";
         case OrderType::Iceberg:           return "ICEBERG";
+        case OrderType::PostOnly:          return "POSTONLY";
+    }
+    return "UNKNOWN";
+}
+
+std::string to_string(OrderStatus status) {
+    switch (status) {
+        case OrderStatus::New:             return "NEW";
+        case OrderStatus::PartiallyFilled: return "PARTIALLY_FILLED";
+        case OrderStatus::Filled:          return "FILLED";
+        case OrderStatus::Cancelled:       return "CANCELLED";
+        case OrderStatus::Killed:          return "KILLED";
+        case OrderStatus::Rejected:        return "REJECTED";
     }
     return "UNKNOWN";
 }

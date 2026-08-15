@@ -19,6 +19,12 @@ BOOK
 MARKET BUY - 400
 BOOK
 
+# Post-only at a price that would trade is refused, not executed.
+POSTONLY BUY 100.30 200
+
+# The same order one tick lower rests instead.
+POSTONLY BUY 100.29 200
+
 # Not enough liquidity at or below 100.30 for the whole size, so this is killed.
 FOK BUY 100.30 9000
 
@@ -29,5 +35,14 @@ FOK BUY 100.30 1000
 IOC SELL 100.25 900
 BOOK
 
-# Cancel the resting bid at 100.20 (order 1).
+# Shrinking at the same price keeps the order's place in the queue.
+MODIFY 1 100.20 250
+
+# Repricing sends it to the back of the new level.
+MODIFY 1 100.22 250
+STATUS 1
+
+# Cancel it outright.
 CANCEL 1
+STATUS 1
+STATS
