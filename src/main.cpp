@@ -100,7 +100,8 @@ void print_statistics(const obe::OrderBook& book) {
     if (stats.last_trade_price) {
         std::cout << "  last " << obe::format_price(*stats.last_trade_price) << ", high "
                   << obe::format_price(*stats.high_trade_price) << ", low "
-                  << obe::format_price(*stats.low_trade_price) << "\n";
+                  << obe::format_price(*stats.low_trade_price) << ", vwap "
+                  << obe::format_price(*stats.vwap()) << "\n";
     }
 }
 

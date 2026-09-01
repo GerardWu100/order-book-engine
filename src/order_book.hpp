@@ -41,6 +41,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <list>
 #include <map>
@@ -96,12 +97,23 @@ struct LevelView {
 };
 
 // Running market data derived from the trades the book has printed.
+//
+// `traded_notional` is the running sum of price * quantity over every trade,
+// in tick-shares (price in ticks times shares). Keeping the sum as an integer
+// follows the same rule as everywhere else in this engine: money is never
+// stored as a floating point number.
 struct MarketStatistics {
-    Quantity             traded_volume = 0;
-    std::size_t          trade_count   = 0;
+    Quantity             traded_volume   = 0;
+    std::int64_t         traded_notional = 0;
+    std::size_t          trade_count     = 0;
     std::optional<Price> last_trade_price;
     std::optional<Price> high_trade_price;
     std::optional<Price> low_trade_price;
+
+    // Volume-weighted average price of every trade so far, in ticks, rounded
+    // to the nearest tick:  vwap = traded_notional / traded_volume.
+    // Empty until the first trade.
+    std::optional<Price> vwap() const;
 };
 
 class OrderBook {

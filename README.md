@@ -35,7 +35,7 @@ cmake --build build -j
 | `best_bid`, `best_ask`, `spread`, `mid_price` | Read the best prices and the gap between them |
 | `snapshot` | Read the top N price levels on one side |
 | `quantity_at_price`, `resting_quantity`, `available_quantity` | Read available quantity, including hidden iceberg quantity |
-| `statistics` | Read the last trade price, traded volume, trade count, high, and low |
+| `statistics` | Read the last trade price, traded volume, trade count, high, low, and VWAP (volume-weighted average price) |
 | `validate` | Check every internal rule; the random tester calls this constantly |
 
 ### Order types

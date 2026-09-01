@@ -236,6 +236,7 @@ int main(int argc, char** argv) {
         print_row("last price", obe::format_price(*stats.last_trade_price));
         print_row("high", obe::format_price(*stats.high_trade_price));
         print_row("low", obe::format_price(*stats.low_trade_price));
+        print_row("vwap", obe::format_price(*stats.vwap()));
     }
 
     std::cout << "\nfinal book\n";

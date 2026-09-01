@@ -9,6 +9,15 @@
 
 namespace obe {
 
+std::optional<Price> MarketStatistics::vwap() const {
+    if (traded_volume == 0) {
+        return std::nullopt;
+    }
+    // Round half up: prices and volumes are always positive here, so adding
+    // half the divisor before the integer division rounds to the nearest tick.
+    return static_cast<Price>((traded_notional + traded_volume / 2) / traded_volume);
+}
+
 Quantity SubmitResult::filled_quantity() const {
     Quantity total = 0;
     for (const Trade& trade : trades) {
@@ -36,6 +45,7 @@ OrderState state_of(const Order& order, bool resting) {
 
 void OrderBook::record_trade(const Trade& trade) {
     statistics_.traded_volume += trade.quantity;
+    statistics_.traded_notional += trade.price * trade.quantity;
     statistics_.trade_count += 1;
     statistics_.last_trade_price = trade.price;
 

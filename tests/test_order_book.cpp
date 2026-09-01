@@ -359,6 +359,8 @@ void test_order_lookup_follows_the_lifecycle() {
 
 void test_statistics_follow_the_trades() {
     OrderBook book;
+    CHECK(!book.statistics().vwap().has_value());  // no trades yet
+
     book.submit(Side::Sell, OrderType::Limit, px("100.30"), 100);
     book.submit(Side::Sell, OrderType::Limit, px("100.40"), 100);
     book.submit(Side::Buy, OrderType::Limit, px("100.45"), 200);
@@ -369,6 +371,17 @@ void test_statistics_follow_the_trades() {
     CHECK(stats.last_trade_price.value() == px("100.40"));
     CHECK(stats.high_trade_price.value() == px("100.40"));
     CHECK(stats.low_trade_price.value() == px("100.30"));
+
+    // Two equal-sized trades: vwap is the plain average of the two prices.
+    CHECK(stats.traded_notional == px("100.30") * 100 + px("100.40") * 100);
+    CHECK(stats.vwap().value() == px("100.35"));
+
+    // A third, larger trade must pull the vwap toward its price by volume,
+    // not by trade count: (100.30*100 + 100.40*100 + 100.50*300) / 500.
+    book.submit(Side::Sell, OrderType::Limit, px("100.50"), 300);
+    book.submit(Side::Buy, OrderType::Limit, px("100.50"), 300);
+    CHECK(book.statistics().traded_volume == 500);
+    CHECK(book.statistics().vwap().value() == px("100.44"));
 }
 
 void test_spread_and_mid_price() {
