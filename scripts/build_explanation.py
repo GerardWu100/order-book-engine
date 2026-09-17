@@ -198,7 +198,11 @@ def section_of(output: str, heading: str) -> str:
     blocks = output.split("\n\n")
     for block in blocks:
         if block.strip().startswith(heading):
-            kept = [line for line in block.rstrip().splitlines() if "instructions/sec" not in line]
+            kept = [
+                line
+                for line in block.rstrip().splitlines()
+                if "instructions/sec" not in line
+            ]
             return "\n".join(kept)
     raise SystemExit(f"block not found in random output: {heading}")
 
@@ -213,15 +217,23 @@ def build() -> str:
     # Snippets, straight from the source.
     snip_level = extract_block(SRC / "order_book.hpp", "struct PriceLevel {")
     snip_ladders = extract_lines(
-        SRC / "order_book.hpp", "using BidLadder", "std::list<Order>::iterator position;"
+        SRC / "order_book.hpp",
+        "using BidLadder",
+        "std::list<Order>::iterator position;",
     )
-    snip_submit = extract_block(SRC / "order_book.cpp", "SubmitResult OrderBook::submit(")
-    snip_execute = extract_block(SRC / "order_book.cpp", "SubmitResult OrderBook::execute(")
+    snip_submit = extract_block(
+        SRC / "order_book.cpp", "SubmitResult OrderBook::submit("
+    )
+    snip_execute = extract_block(
+        SRC / "order_book.cpp", "SubmitResult OrderBook::execute("
+    )
     snip_match = extract_block(SRC / "order_book.cpp", "void OrderBook::match(")
     snip_rest = extract_block(SRC / "order_book.cpp", "void OrderBook::rest(")
     snip_detach = extract_block(SRC / "order_book.cpp", "Order OrderBook::detach(")
     snip_cancel = extract_block(SRC / "order_book.cpp", "bool OrderBook::cancel(")
-    snip_modify = extract_block(SRC / "order_book.cpp", "ModifyResult OrderBook::modify(")
+    snip_modify = extract_block(
+        SRC / "order_book.cpp", "ModifyResult OrderBook::modify("
+    )
     snip_next = extract_block(SRC / "random_flow.cpp", "Instruction RandomFlow::next(")
 
     # Sample data, straight from the binaries.
